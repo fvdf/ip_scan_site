@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -359,7 +360,16 @@ class _FeatureGrid extends StatelessWidget {
 }
 
 class IpSearchPage extends StatefulWidget {
-  const IpSearchPage({super.key});
+  const IpSearchPage({
+    super.key,
+    this.api = const IpAnalysisApi(),
+    this.initialCsvFileName,
+    this.initialCsvText,
+  });
+
+  final IpAnalysisApi api;
+  final String? initialCsvFileName;
+  final String? initialCsvText;
 
   @override
   State<IpSearchPage> createState() => _IpSearchPageState();
@@ -368,7 +378,6 @@ class IpSearchPage extends StatefulWidget {
 class _IpSearchPageState extends State<IpSearchPage> {
   static const _maxCsvBytes = 1000000;
 
-  final _api = const IpAnalysisApi();
   final _ipController = TextEditingController();
 
   _IpSearchMode _mode = _IpSearchMode.single;
@@ -377,6 +386,13 @@ class _IpSearchPageState extends State<IpSearchPage> {
   String? _errorMessage;
   String? _csvFileName;
   String? _csvText;
+
+  @override
+  void initState() {
+    super.initState();
+    _csvFileName = widget.initialCsvFileName;
+    _csvText = widget.initialCsvText;
+  }
 
   @override
   void dispose() {
@@ -439,7 +455,7 @@ class _IpSearchPageState extends State<IpSearchPage> {
       });
       return;
     }
-    await _runSearch(() => _api.analyzeIp(ip));
+    await _runSearch(() => widget.api.analyzeIp(ip));
   }
 
   Future<void> _runCsvSearch() async {
@@ -451,13 +467,13 @@ class _IpSearchPageState extends State<IpSearchPage> {
       });
       return;
     }
-    await _runSearch(() => _api.analyzeCsv(csvText));
+    await _runSearch(() => widget.api.analyzeCsv(csvText));
   }
 
   Future<void> _runSearch(
     Future<Map<String, dynamic>> Function() request,
   ) async {
-    if (!_api.isConfigured) {
+    if (!widget.api.isConfigured) {
       setState(() {
         _status = _IpSearchStatus.error;
         _errorMessage =
@@ -500,7 +516,7 @@ class _IpSearchPageState extends State<IpSearchPage> {
         children: [
           const _IpSearchHeader(),
           const SizedBox(height: 22),
-          if (!_api.isConfigured) ...[
+          if (!widget.api.isConfigured) ...[
             const _ConfigurationNotice(),
             const SizedBox(height: 18),
           ],
@@ -925,41 +941,30 @@ class _SingleIpResult extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (result['ok'] != true) {
-      return _ErrorResultSurface(
-        message: result['error']?.toString() ?? 'Analyse IP impossible.',
-      );
-    }
+    return _ResultSurface(child: _IpResultDetailContent(result: result));
+  }
+}
 
-    final location = _mapValue(result['location']);
-    final network = _mapValue(result['network']);
-    final analysis = _mapValue(result['analysis']);
-    final reasons = _stringList(analysis['reasons']);
-    final requirements = _stringList(result['identity_requirements']);
+class IpDetailPage extends StatelessWidget {
+  const IpDetailPage({super.key, required this.result});
 
-    return _ResultSurface(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _ResultTitle(title: result['ip']?.toString() ?? 'IP analysee'),
-          const SizedBox(height: 16),
-          _KeyValueWrap(
-            values: {
-              'Pays': location['country'],
-              'Ville': location['city'],
-              'Operateur': network['isp'] ?? network['org'],
-              'ASN': network['asn_full'] ?? network['asn'],
-              'Categorie': analysis['category'],
-              'Score': analysis['score'],
-              'Valeur': analysis['investigative_value'],
-              'Confiance': analysis['confidence'],
-            },
-          ),
-          const SizedBox(height: 18),
-          _TextList(title: 'Raisons', items: reasons),
-          const SizedBox(height: 18),
-          _TextList(title: 'Pour aller plus loin', items: requirements),
-        ],
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _IpResultViewModel(result);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7FAFC),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        elevation: 1,
+        shadowColor: Colors.black26,
+        title: Text('Detail IP ${viewModel.ip}'),
+      ),
+      body: _PageFrame(
+        child: _ResultSurface(child: _IpResultDetailContent(result: result)),
       ),
     );
   }
@@ -1008,6 +1013,145 @@ class _CsvResult extends StatelessWidget {
           const SizedBox(height: 18),
           _ResultList(results: results),
         ],
+      ),
+    );
+  }
+}
+
+class _IpResultDetailContent extends StatelessWidget {
+  const _IpResultDetailContent({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _IpResultViewModel(result);
+    final reasons = _stringList(viewModel.analysis['reasons']);
+    final requirements = _stringList(result['identity_requirements']);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _IpDetailHeader(viewModel: viewModel),
+        const SizedBox(height: 16),
+        if (!viewModel.ok) ...[
+          _InlineErrorBlock(
+            message: viewModel.errorText ?? 'Analyse IP impossible.',
+          ),
+        ] else ...[
+          _KeyValueWrap(
+            values: {
+              'Pays': viewModel.country,
+              'Ville': viewModel.city,
+              'Operateur': viewModel.operatorName,
+              'Organisation': viewModel.organization,
+              'ASN': viewModel.asn,
+              'Categorie': viewModel.category,
+              'Score': viewModel.scoreText,
+              'Valeur': viewModel.investigativeValue,
+              'Confiance': viewModel.confidence,
+              'Occurrences': viewModel.occurrences,
+            },
+          ),
+          const SizedBox(height: 18),
+          _FlagChips(flags: viewModel.flags),
+          const SizedBox(height: 18),
+          _TextList(title: 'Raisons', items: reasons),
+          const SizedBox(height: 18),
+          _TextList(title: 'Pour aller plus loin', items: requirements),
+        ],
+      ],
+    );
+  }
+}
+
+class _IpDetailHeader extends StatelessWidget {
+  const _IpDetailHeader({required this.viewModel});
+
+  final _IpResultViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 680;
+        final title = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ResultTitle(title: viewModel.ip),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _CategoryBadge(
+                  label: viewModel.categoryOrError,
+                  error: !viewModel.ok,
+                ),
+                _ScorePill(score: viewModel.score),
+              ],
+            ),
+          ],
+        );
+        final actions = Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => _copyIp(context, viewModel),
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copier l IP'),
+            ),
+            FilledButton.icon(
+              onPressed: () => _copySummary(context, viewModel),
+              icon: const Icon(Icons.summarize, size: 18),
+              label: const Text('Copier le resume'),
+            ),
+          ],
+        );
+
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: title),
+              const SizedBox(width: 16),
+              actions,
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [title, const SizedBox(height: 14), actions],
+        );
+      },
+    );
+  }
+}
+
+class _InlineErrorBlock extends StatelessWidget {
+  const _InlineErrorBlock({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFCA5A5)),
+      ),
+      child: Text(
+        message,
+        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          color: const Color(0xFF991B1B),
+          height: 1.4,
+        ),
       ),
     );
   }
@@ -1203,78 +1347,516 @@ class _ResultList extends StatelessWidget {
       return const Text('Aucun resultat.');
     }
 
+    final visibleResults = results.take(30).toList();
+    final hiddenCount = results.length - visibleResults.length;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Resultats',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: const Color(0xFF111827),
-            fontWeight: FontWeight.w800,
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Resultats',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Text(
+              '${visibleResults.length}/${results.length} affiches',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
-        for (final result in results.take(30)) ...[
-          _CompactIpRow(result: result),
-          const SizedBox(height: 8),
-        ],
-        if (results.length > 30)
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth >= 760) {
+              return _DesktopIpResultsTable(results: visibleResults);
+            }
+            return _MobileIpResultCards(results: visibleResults);
+          },
+        ),
+        if (hiddenCount > 0) ...[
+          const SizedBox(height: 10),
           Text(
-            '${results.length - 30} resultats supplementaires non affiches.',
+            '$hiddenCount resultats supplementaires non affiches.',
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _DesktopIpResultsTable extends StatelessWidget {
+  const _DesktopIpResultsTable({required this.results});
+
+  final List<Map<String, dynamic>> results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          showCheckboxColumn: false,
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+          columns: const [
+            DataColumn(label: Text('IP')),
+            DataColumn(label: Text('Pays')),
+            DataColumn(label: Text('Ville')),
+            DataColumn(label: Text('Operateur')),
+            DataColumn(label: Text('Categorie')),
+            DataColumn(label: Text('Score')),
+            DataColumn(label: Text('Occurrences')),
+            DataColumn(label: Text('Actions')),
+          ],
+          rows: [
+            for (final result in results)
+              _buildIpDataRow(context: context, result: result),
+          ],
+        ),
+      ),
+    );
+  }
+
+  DataRow _buildIpDataRow({
+    required BuildContext context,
+    required Map<String, dynamic> result,
+  }) {
+    final viewModel = _IpResultViewModel(result);
+
+    return DataRow(
+      onSelectChanged: (_) => _openIpDetail(context, result),
+      color: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return const Color(0xFFEFF6FF);
+        }
+        if (!viewModel.ok) {
+          return const Color(0xFFFFFBFB);
+        }
+        return null;
+      }),
+      cells: [
+        DataCell(
+          SizedBox(
+            width: 130,
+            child: Text(
+              viewModel.ip,
+              key: ValueKey('ip-row-${viewModel.ip}'),
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+        DataCell(_TableText(viewModel.country ?? 'Pays inconnu', width: 110)),
+        DataCell(_TableText(viewModel.city ?? 'Ville inconnue', width: 120)),
+        DataCell(
+          _TableText(viewModel.operatorName ?? 'Operateur inconnu', width: 190),
+        ),
+        DataCell(
+          SizedBox(
+            width: 210,
+            child: _CategoryBadge(
+              label: viewModel.categoryOrError,
+              error: !viewModel.ok,
+            ),
+          ),
+        ),
+        DataCell(_ScorePill(score: viewModel.score)),
+        DataCell(Text(viewModel.occurrencesText)),
+        DataCell(_IpRowActions(result: result, viewModel: viewModel)),
+      ],
+    );
+  }
+}
+
+class _TableText extends StatelessWidget {
+  const _TableText(this.text, {required this.width});
+
+  final String text;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: width,
+      child: Text(text, overflow: TextOverflow.ellipsis),
+    );
+  }
+}
+
+class _MobileIpResultCards extends StatelessWidget {
+  const _MobileIpResultCards({required this.results});
+
+  final List<Map<String, dynamic>> results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final result in results) ...[
+          _MobileIpResultCard(result: result),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _MobileIpResultCard extends StatelessWidget {
+  const _MobileIpResultCard({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _IpResultViewModel(result);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: viewModel.ok ? const Color(0xFFF9FAFB) : const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: viewModel.ok
+              ? const Color(0xFFE5E7EB)
+              : const Color(0xFFFCA5A5),
+        ),
+      ),
+      child: InkWell(
+        key: ValueKey('ip-card-${viewModel.ip}'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _openIpDetail(context, result),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      viewModel.ip,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  _IpRowActions(result: result, viewModel: viewModel),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _CategoryBadge(
+                    label: viewModel.categoryOrError,
+                    error: !viewModel.ok,
+                  ),
+                  _ScorePill(score: viewModel.score),
+                  Text(viewModel.occurrencesText),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(viewModel.country ?? 'Pays inconnu'),
+              Text(viewModel.city ?? 'Ville inconnue'),
+              Text(viewModel.operatorName ?? 'Operateur inconnu'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _IpRowActions extends StatelessWidget {
+  const _IpRowActions({required this.result, required this.viewModel});
+
+  final Map<String, dynamic> result;
+  final _IpResultViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'Copier l IP ${viewModel.ip}',
+          onPressed: () => _copyIp(context, viewModel),
+          icon: const Icon(Icons.copy, size: 18),
+        ),
+        IconButton(
+          tooltip: 'Voir le detail ${viewModel.ip}',
+          onPressed: () => _openIpDetail(context, result),
+          icon: const Icon(Icons.open_in_new, size: 18),
+        ),
+      ],
+    );
+  }
+}
+
+class _CategoryBadge extends StatelessWidget {
+  const _CategoryBadge({required this.label, this.error = false});
+
+  final String label;
+  final bool error;
+
+  @override
+  Widget build(BuildContext context) {
+    final backgroundColor = error
+        ? const Color(0xFFFEF2F2)
+        : const Color(0xFFE0F2F1);
+    final borderColor = error
+        ? const Color(0xFFFCA5A5)
+        : const Color(0xFF99F6E4);
+    final textColor = error ? const Color(0xFF991B1B) : const Color(0xFF115E59);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Text(
+        label,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: textColor,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _ScorePill extends StatelessWidget {
+  const _ScorePill({required this.score});
+
+  final int? score;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = score;
+    final color = value == null
+        ? const Color(0xFF6B7280)
+        : value >= 70
+        ? const Color(0xFFB91C1C)
+        : value >= 40
+        ? const Color(0xFF92400E)
+        : const Color(0xFF166534);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        value == null ? 'Score inconnu' : 'Score $value',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _FlagChips extends StatelessWidget {
+  const _FlagChips({required this.flags});
+
+  final Map<String, dynamic> flags;
+
+  @override
+  Widget build(BuildContext context) {
+    if (flags.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final items = [
+      MapEntry('Mobile', _boolValue(flags['is_mobile'])),
+      MapEntry('Proxy VPN Tor', _boolValue(flags['is_proxy_or_vpn_or_tor'])),
+      MapEntry(
+        'Hosting datacenter',
+        _boolValue(flags['is_hosting_or_datacenter']),
+      ),
+    ];
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final item in items)
+          Chip(
+            avatar: Icon(
+              item.value == true ? Icons.check_circle : Icons.cancel,
+              size: 18,
+              color: item.value == true
+                  ? const Color(0xFF166534)
+                  : const Color(0xFF6B7280),
+            ),
+            label: Text('${item.key}: ${item.value == true ? 'oui' : 'non'}'),
           ),
       ],
     );
   }
 }
 
-class _CompactIpRow extends StatelessWidget {
-  const _CompactIpRow({required this.result});
+class _IpResultViewModel {
+  const _IpResultViewModel(this.raw);
 
-  final Map<String, dynamic> result;
+  final Map<String, dynamic> raw;
 
-  @override
-  Widget build(BuildContext context) {
-    final location = _mapValue(result['location']);
-    final network = _mapValue(result['network']);
-    final analysis = _mapValue(result['analysis']);
-    final ok = result['ok'] == true;
+  bool get ok => raw['ok'] == true;
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: ok ? const Color(0xFFF9FAFB) : const Color(0xFFFEF2F2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: ok ? const Color(0xFFE5E7EB) : const Color(0xFFFCA5A5),
-        ),
-      ),
-      child: Wrap(
-        spacing: 14,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Text(
-            (result['ip'] ?? result['input'] ?? 'IP inconnue').toString(),
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-          Text((location['country'] ?? 'Pays inconnu').toString()),
-          Text(
-            (network['isp'] ?? network['org'] ?? 'Operateur inconnu')
-                .toString(),
-          ),
-          Text(
-            (analysis['category'] ?? result['error'] ?? 'Categorie inconnue')
-                .toString(),
-          ),
-          if (result['occurrences'] != null)
-            Text('${result['occurrences']} occurrence(s)'),
-        ],
-      ),
-    );
+  Map<String, dynamic> get location => _mapValue(raw['location']);
+
+  Map<String, dynamic> get network => _mapValue(raw['network']);
+
+  Map<String, dynamic> get analysis => _mapValue(raw['analysis']);
+
+  Map<String, dynamic> get flags => _mapValue(raw['flags']);
+
+  String get ip =>
+      _textValue(raw['ip']) ?? _textValue(raw['input']) ?? 'IP inconnue';
+
+  String? get errorText => _textValue(raw['error']);
+
+  String? get country => _textValue(location['country']);
+
+  String? get city => _textValue(location['city']);
+
+  String? get operatorName => _textValue(network['isp']) ?? organization;
+
+  String? get organization => _textValue(network['org']);
+
+  String? get asn =>
+      _textValue(network['asn_full']) ?? _textValue(network['asn']);
+
+  String? get category => _textValue(analysis['category']);
+
+  String get categoryOrError {
+    if (!ok) {
+      return errorText ?? 'Erreur analyse';
+    }
+    return category ?? 'Categorie inconnue';
   }
+
+  int? get score => _intValue(analysis['score']);
+
+  String get scoreText => score?.toString() ?? 'Non note';
+
+  String? get investigativeValue => _textValue(analysis['investigative_value']);
+
+  String? get confidence => _textValue(analysis['confidence']);
+
+  int? get occurrences => _intValue(raw['occurrences']);
+
+  String get occurrencesText {
+    final count = occurrences;
+    if (count == null) {
+      return 'Occurrence inconnue';
+    }
+    return count > 1 ? '$count occurrences' : '1 occurrence';
+  }
+
+  String get summaryText {
+    final entries = <MapEntry<String, String?>>[
+      MapEntry('IP', ip),
+      MapEntry('Pays', country),
+      MapEntry('Ville', city),
+      MapEntry('Operateur', operatorName),
+      MapEntry('ASN', asn),
+      MapEntry('Categorie', ok ? category : errorText),
+      MapEntry('Score', scoreText),
+      MapEntry('Valeur investigative', investigativeValue),
+      MapEntry('Confiance', confidence),
+    ];
+
+    return entries
+        .where((entry) => entry.value != null && entry.value!.isNotEmpty)
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join('\n');
+  }
+}
+
+void _openIpDetail(BuildContext context, Map<String, dynamic> result) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (context) =>
+          IpDetailPage(result: Map<String, dynamic>.from(result)),
+    ),
+  );
+}
+
+Future<void> _copyIp(BuildContext context, _IpResultViewModel viewModel) async {
+  await _copyText(context, viewModel.ip, 'IP');
+}
+
+Future<void> _copySummary(
+  BuildContext context,
+  _IpResultViewModel viewModel,
+) async {
+  await _copyText(context, viewModel.summaryText, 'Resume');
+}
+
+Future<void> _copyText(BuildContext context, String text, String label) async {
+  await Clipboard.setData(ClipboardData(text: text));
+  if (!context.mounted) {
+    return;
+  }
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$label copie dans le presse-papiers.')),
+  );
+}
+
+String? _textValue(Object? value) {
+  final text = value?.toString().trim();
+  if (text == null || text.isEmpty) {
+    return null;
+  }
+  return text;
+}
+
+int? _intValue(Object? value) {
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.round();
+  }
+  return int.tryParse(value?.toString() ?? '');
+}
+
+bool? _boolValue(Object? value) {
+  if (value is bool) {
+    return value;
+  }
+  if (value is String) {
+    final normalized = value.toLowerCase().trim();
+    if (normalized == 'true') {
+      return true;
+    }
+    if (normalized == 'false') {
+      return false;
+    }
+  }
+  return null;
 }
 
 Map<String, dynamic> _mapValue(Object? value) {
