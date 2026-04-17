@@ -567,6 +567,14 @@ class IpAnalysisApi {
     return _post('/analyze-ips', {'csv': csvText});
   }
 
+  Future<Map<String, dynamic>> analyzeDomain(String domain) {
+    return _post('/analyze-domain', {'domain': domain});
+  }
+
+  Future<Map<String, dynamic>> analyzeDomainCsv(String csvText) {
+    return _post('/analyze-domains', {'csv': csvText});
+  }
+
   Future<Map<String, dynamic>> _post(
     String path,
     Map<String, dynamic> payload,
@@ -1889,25 +1897,1250 @@ List<String> _stringList(Object? value) {
   return value.map((item) => item.toString()).toList();
 }
 
-class DomainSearchPage extends StatelessWidget {
-  const DomainSearchPage({super.key});
+class DomainSearchPage extends StatefulWidget {
+  const DomainSearchPage({
+    super.key,
+    this.api = const IpAnalysisApi(),
+    this.initialCsvFileName,
+    this.initialCsvText,
+  });
+
+  final IpAnalysisApi api;
+  final String? initialCsvFileName;
+  final String? initialCsvText;
+
+  @override
+  State<DomainSearchPage> createState() => _DomainSearchPageState();
+}
+
+class _DomainSearchPageState extends State<DomainSearchPage> {
+  static const _maxCsvBytes = 1000000;
+
+  final _domainController = TextEditingController();
+
+  _DomainSearchMode _mode = _DomainSearchMode.single;
+  _IpSearchStatus _status = _IpSearchStatus.idle;
+  Map<String, dynamic>? _response;
+  String? _errorMessage;
+  String? _csvFileName;
+  String? _csvText;
+
+  @override
+  void initState() {
+    super.initState();
+    _csvFileName = widget.initialCsvFileName;
+    _csvText = widget.initialCsvText;
+  }
+
+  @override
+  void dispose() {
+    _domainController.dispose();
+    super.dispose();
+  }
+
+  void _setMode(_DomainSearchMode mode) {
+    setState(() {
+      _mode = mode;
+      _status = _IpSearchStatus.idle;
+      _response = null;
+      _errorMessage = null;
+    });
+  }
+
+  Future<void> _pickCsv() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['csv'],
+      withData: true,
+    );
+    if (!mounted || picked == null || picked.files.isEmpty) {
+      return;
+    }
+
+    final file = picked.files.single;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage = 'Impossible de lire le fichier selectionne.';
+      });
+      return;
+    }
+
+    if (bytes.length > _maxCsvBytes) {
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage = 'Le fichier CSV depasse la limite de 1 MB.';
+      });
+      return;
+    }
+
+    setState(() {
+      _csvFileName = file.name;
+      _csvText = utf8.decode(bytes, allowMalformed: true);
+      _status = _IpSearchStatus.idle;
+      _response = null;
+      _errorMessage = null;
+    });
+  }
+
+  Future<void> _runSingleDomainSearch() async {
+    final domain = _domainController.text.trim();
+    if (domain.isEmpty) {
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage = 'Saisissez un nom de domaine.';
+      });
+      return;
+    }
+    await _runSearch(() => widget.api.analyzeDomain(domain));
+  }
+
+  Future<void> _runCsvSearch() async {
+    final csvText = _csvText;
+    if (csvText == null || csvText.trim().isEmpty) {
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage = 'Selectionnez un fichier CSV contenant des domaines.';
+      });
+      return;
+    }
+    await _runSearch(() => widget.api.analyzeDomainCsv(csvText));
+  }
+
+  Future<void> _runSearch(
+    Future<Map<String, dynamic>> Function() request,
+  ) async {
+    if (!widget.api.isConfigured) {
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage =
+            'Configurez IP_SCAN_API_BASE_URL avec le domaine Appwrite Function.';
+      });
+      return;
+    }
+
+    setState(() {
+      _status = _IpSearchStatus.loading;
+      _response = null;
+      _errorMessage = null;
+    });
+
+    try {
+      final response = await request();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = _IpSearchStatus.success;
+        _response = response;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = _IpSearchStatus.error;
+        _errorMessage = error.toString();
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return const _PageFrame(
-      child: _SearchPanel(
-        icon: Icons.language,
-        title: 'Recherche nom de domaine',
-        description: 'Saisissez un domaine pour preparer une verification DNS.',
-        label: 'Nom de domaine',
-        hintText: 'Exemple: example.com',
-        buttonText: 'Rechercher le domaine',
-        resultTitle: 'Resultat',
-        resultText:
-            'La zone de resultat est prete pour afficher les informations DNS, registrar ou disponibilite.',
+    return _PageFrame(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _DomainSearchHeader(),
+          const SizedBox(height: 22),
+          if (!widget.api.isConfigured) ...[
+            const _ConfigurationNotice(),
+            const SizedBox(height: 18),
+          ],
+          _DomainModeSelector(selected: _mode, onChanged: _setMode),
+          const SizedBox(height: 18),
+          if (_mode == _DomainSearchMode.single)
+            _SingleDomainForm(
+              controller: _domainController,
+              loading: _status == _IpSearchStatus.loading,
+              onSubmit: _runSingleDomainSearch,
+            )
+          else
+            _CsvForm(
+              fileName: _csvFileName,
+              loading: _status == _IpSearchStatus.loading,
+              onPick: _pickCsv,
+              onSubmit: _runCsvSearch,
+            ),
+          const SizedBox(height: 22),
+          _DomainResultPanel(
+            mode: _mode,
+            status: _status,
+            response: _response,
+            errorMessage: _errorMessage,
+          ),
+        ],
       ),
     );
   }
+}
+
+enum _DomainSearchMode { single, csv }
+
+class _DomainSearchHeader extends StatelessWidget {
+  const _DomainSearchHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const CircleAvatar(
+          radius: 24,
+          backgroundColor: Color(0xFFE0F2F1),
+          child: Icon(Icons.language, color: Color(0xFF0F766E)),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Recherche nom de domaine',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Collectez DNS, RDAP, IP, hebergeur probable, certificats et contacts publics.',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF4B5563),
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DomainModeSelector extends StatelessWidget {
+  const _DomainModeSelector({required this.selected, required this.onChanged});
+
+  final _DomainSearchMode selected;
+  final ValueChanged<_DomainSearchMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        ChoiceChip(
+          label: const Text('Nom de domaine'),
+          selected: selected == _DomainSearchMode.single,
+          onSelected: (_) => onChanged(_DomainSearchMode.single),
+        ),
+        ChoiceChip(
+          label: const Text('Fichier CSV'),
+          selected: selected == _DomainSearchMode.csv,
+          onSelected: (_) => onChanged(_DomainSearchMode.csv),
+        ),
+      ],
+    );
+  }
+}
+
+class _SingleDomainForm extends StatelessWidget {
+  const _SingleDomainForm({
+    required this.controller,
+    required this.loading,
+    required this.onSubmit,
+  });
+
+  final TextEditingController controller;
+  final bool loading;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return _FormSurface(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 720;
+          final field = TextField(
+            controller: controller,
+            enabled: !loading,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => loading ? null : onSubmit(),
+            decoration: const InputDecoration(
+              labelText: 'Nom de domaine',
+              hintText: 'Exemple: example.com',
+            ),
+          );
+          final button = FilledButton(
+            onPressed: loading ? null : onSubmit,
+            child: const Text('Rechercher le domaine'),
+          );
+
+          if (wide) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: field),
+                const SizedBox(width: 14),
+                button,
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [field, const SizedBox(height: 14), button],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _DomainResultPanel extends StatelessWidget {
+  const _DomainResultPanel({
+    required this.mode,
+    required this.status,
+    required this.response,
+    required this.errorMessage,
+  });
+
+  final _DomainSearchMode mode;
+  final _IpSearchStatus status;
+  final Map<String, dynamic>? response;
+  final String? errorMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == _IpSearchStatus.loading) {
+      return const _DarkResultSurface(
+        child: Row(
+          children: [
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 3),
+            ),
+            SizedBox(width: 14),
+            Expanded(child: Text('Analyse domaine en cours...')),
+          ],
+        ),
+      );
+    }
+
+    if (status == _IpSearchStatus.error) {
+      return _ErrorResultSurface(message: errorMessage ?? 'Erreur inconnue.');
+    }
+
+    if (status == _IpSearchStatus.success && response != null) {
+      if (mode == _DomainSearchMode.csv) {
+        return _DomainCsvResult(response: response!);
+      }
+      final result = response!['result'];
+      if (result is Map<String, dynamic>) {
+        return _SingleDomainResult(result: result);
+      }
+      return const _ErrorResultSurface(message: 'Reponse domaine illisible.');
+    }
+
+    return const _DarkResultSurface(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Resultat',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Lancez une recherche pour afficher le DNS, le registrar, les IP, l hebergeur probable et les contacts publics.',
+            style: TextStyle(color: Color(0xFFD1D5DB), height: 1.45),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SingleDomainResult extends StatelessWidget {
+  const _SingleDomainResult({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ResultSurface(child: _DomainResultDetailContent(result: result));
+  }
+}
+
+class DomainDetailPage extends StatelessWidget {
+  const DomainDetailPage({super.key, required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _DomainResultViewModel(result);
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7FAFC),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
+        elevation: 1,
+        shadowColor: Colors.black26,
+        title: Text('Detail domaine ${viewModel.domain}'),
+      ),
+      body: _PageFrame(
+        child: _ResultSurface(
+          child: _DomainResultDetailContent(result: result),
+        ),
+      ),
+    );
+  }
+}
+
+class _DomainCsvResult extends StatelessWidget {
+  const _DomainCsvResult({required this.response});
+
+  final Map<String, dynamic> response;
+
+  @override
+  Widget build(BuildContext context) {
+    if (response['ok'] != true) {
+      return _ErrorResultSurface(
+        message: response['error']?.toString() ?? 'Analyse CSV impossible.',
+      );
+    }
+
+    final summary = _mapValue(response['summary']);
+    final registrars = _mapValue(summary['registrars']);
+    final hostingProviders = _mapValue(summary['hosting_providers']);
+    final ownerVisibility = _mapValue(summary['owner_visibility']);
+    final priorities = _mapList(summary['priority_domains']);
+    final results = _mapList(response['results']);
+
+    return _ResultSurface(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _ResultTitle(title: 'Resume des domaines'),
+          const SizedBox(height: 16),
+          _KeyValueWrap(
+            values: {
+              'Domaines': response['input_count'],
+              'Domaines uniques': response['unique_count'],
+              'Analyses OK': summary['ok'],
+              'Erreurs': summary['errors'],
+            },
+          ),
+          if (registrars.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            const _SectionTitle('Registrars'),
+            const SizedBox(height: 10),
+            _CategoryChips(categories: registrars),
+          ],
+          if (hostingProviders.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            const _SectionTitle('Hebergeurs probables'),
+            const SizedBox(height: 10),
+            _CategoryChips(categories: hostingProviders),
+          ],
+          if (ownerVisibility.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            const _SectionTitle('Visibilite proprietaire'),
+            const SizedBox(height: 10),
+            _CategoryChips(categories: ownerVisibility),
+          ],
+          if (priorities.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            _DomainPriorityList(priorities: priorities),
+          ],
+          const SizedBox(height: 18),
+          _DomainResultList(results: results),
+        ],
+      ),
+    );
+  }
+}
+
+class _DomainResultDetailContent extends StatelessWidget {
+  const _DomainResultDetailContent({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _DomainResultViewModel(result);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _DomainDetailHeader(viewModel: viewModel),
+        const SizedBox(height: 16),
+        if (!viewModel.ok) ...[
+          _InlineErrorBlock(
+            message: viewModel.errorText ?? 'Analyse domaine impossible.',
+          ),
+        ] else ...[
+          _KeyValueWrap(
+            values: {
+              'Registrar': viewModel.registrar,
+              'Proprietaire': viewModel.ownerVisibilityLabel,
+              'Hebergeur': viewModel.hostingProvider,
+              'CDN/proxy': viewModel.cdnText,
+              'IP trouvees': viewModel.ipCountText,
+              'Creation': viewModel.createdAt,
+              'Expiration': viewModel.expiresAt,
+              'HTTP': viewModel.httpStatusText,
+              'TLS': viewModel.tlsText,
+              'SPF': viewModel.spfText,
+              'DMARC': viewModel.dmarcText,
+              'DNSSEC': viewModel.dnssecText,
+              'Sous-domaines CT': viewModel.ctSubdomainCountText,
+              'Occurrences': viewModel.occurrences,
+            },
+          ),
+          const SizedBox(height: 18),
+          _TextList(
+            title: 'Indices hebergement',
+            items: viewModel.hostingEvidence,
+          ),
+          const SizedBox(height: 18),
+          _DomainContactsList(contacts: viewModel.publicContacts),
+          const SizedBox(height: 18),
+          _DomainDnsSummary(dns: viewModel.dns),
+          const SizedBox(height: 18),
+          _DomainIpSummary(ips: viewModel.ips),
+          const SizedBox(height: 18),
+          _TextList(title: 'Limites et suite', items: viewModel.limitations),
+          if (viewModel.requestTemplate.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            _RequestTemplateBox(template: viewModel.requestTemplate),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+class _DomainDetailHeader extends StatelessWidget {
+  const _DomainDetailHeader({required this.viewModel});
+
+  final _DomainResultViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 680;
+        final title = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ResultTitle(title: viewModel.domain),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                _CategoryBadge(
+                  label: viewModel.ok
+                      ? viewModel.ownerVisibilityLabel
+                      : viewModel.categoryOrError,
+                  error: !viewModel.ok,
+                ),
+                if (viewModel.isCdnOrProxy)
+                  const _CategoryBadge(label: 'CDN/proxy probable'),
+              ],
+            ),
+          ],
+        );
+        final actions = Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => _copyDomain(context, viewModel),
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copier le domaine'),
+            ),
+            FilledButton.icon(
+              onPressed: () => _copyDomainSummary(context, viewModel),
+              icon: const Icon(Icons.summarize, size: 18),
+              label: const Text('Copier le resume'),
+            ),
+            if (viewModel.requestTemplate.isNotEmpty)
+              OutlinedButton.icon(
+                onPressed: () => _copyDomainRequest(context, viewModel),
+                icon: const Icon(Icons.assignment_outlined, size: 18),
+                label: const Text('Copier la demande'),
+              ),
+          ],
+        );
+
+        if (wide) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: title),
+              const SizedBox(width: 16),
+              actions,
+            ],
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [title, const SizedBox(height: 14), actions],
+        );
+      },
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+        color: const Color(0xFF111827),
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+}
+
+class _DomainPriorityList extends StatelessWidget {
+  const _DomainPriorityList({required this.priorities});
+
+  final List<Map<String, dynamic>> priorities;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionTitle('Domaines a traiter'),
+        const SizedBox(height: 10),
+        for (final item in priorities.take(8)) ...[
+          Text(
+            '${item['domain']} - ${item['registrar']} - ${item['owner_visibility']}',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF374151),
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+}
+
+class _DomainResultList extends StatelessWidget {
+  const _DomainResultList({required this.results});
+
+  final List<Map<String, dynamic>> results;
+
+  @override
+  Widget build(BuildContext context) {
+    if (results.isEmpty) {
+      return const Text('Aucun resultat.');
+    }
+
+    final visibleResults = results.take(30).toList();
+    final hiddenCount = results.length - visibleResults.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Resultats',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            Text(
+              '${visibleResults.length}/${results.length} affiches',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth >= 760) {
+              return _DesktopDomainResultsTable(results: visibleResults);
+            }
+            return _MobileDomainResultCards(results: visibleResults);
+          },
+        ),
+        if (hiddenCount > 0) ...[
+          const SizedBox(height: 10),
+          Text(
+            '$hiddenCount resultats supplementaires non affiches.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _DesktopDomainResultsTable extends StatelessWidget {
+  const _DesktopDomainResultsTable({required this.results});
+
+  final List<Map<String, dynamic>> results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          showCheckboxColumn: false,
+          headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+          columns: const [
+            DataColumn(label: Text('Domaine')),
+            DataColumn(label: Text('Registrar')),
+            DataColumn(label: Text('Hebergeur')),
+            DataColumn(label: Text('Proprietaire')),
+            DataColumn(label: Text('IP')),
+            DataColumn(label: Text('HTTP')),
+            DataColumn(label: Text('Actions')),
+          ],
+          rows: [
+            for (final result in results)
+              _buildDomainDataRow(context: context, result: result),
+          ],
+        ),
+      ),
+    );
+  }
+
+  DataRow _buildDomainDataRow({
+    required BuildContext context,
+    required Map<String, dynamic> result,
+  }) {
+    final viewModel = _DomainResultViewModel(result);
+
+    return DataRow(
+      onSelectChanged: (_) => _openDomainDetail(context, result),
+      color: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) {
+          return const Color(0xFFEFF6FF);
+        }
+        if (!viewModel.ok) {
+          return const Color(0xFFFFFBFB);
+        }
+        return null;
+      }),
+      cells: [
+        DataCell(
+          SizedBox(
+            width: 170,
+            child: Text(
+              viewModel.domain,
+              key: ValueKey('domain-row-${viewModel.domain}'),
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+        ),
+        DataCell(_TableText(viewModel.registrar ?? 'Inconnu', width: 170)),
+        DataCell(
+          _TableText(viewModel.hostingProvider ?? 'Inconnu', width: 170),
+        ),
+        DataCell(
+          SizedBox(
+            width: 190,
+            child: _CategoryBadge(
+              label: viewModel.categoryOrError,
+              error: !viewModel.ok,
+            ),
+          ),
+        ),
+        DataCell(Text(viewModel.ipCountText)),
+        DataCell(Text(viewModel.httpStatusText)),
+        DataCell(_DomainRowActions(result: result, viewModel: viewModel)),
+      ],
+    );
+  }
+}
+
+class _MobileDomainResultCards extends StatelessWidget {
+  const _MobileDomainResultCards({required this.results});
+
+  final List<Map<String, dynamic>> results;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final result in results) ...[
+          _MobileDomainResultCard(result: result),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _MobileDomainResultCard extends StatelessWidget {
+  const _MobileDomainResultCard({required this.result});
+
+  final Map<String, dynamic> result;
+
+  @override
+  Widget build(BuildContext context) {
+    final viewModel = _DomainResultViewModel(result);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: viewModel.ok ? const Color(0xFFF9FAFB) : const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: viewModel.ok
+              ? const Color(0xFFE5E7EB)
+              : const Color(0xFFFCA5A5),
+        ),
+      ),
+      child: InkWell(
+        key: ValueKey('domain-card-${viewModel.domain}'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _openDomainDetail(context, result),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      viewModel.domain,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  _DomainRowActions(result: result, viewModel: viewModel),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _CategoryBadge(
+                    label: viewModel.categoryOrError,
+                    error: !viewModel.ok,
+                  ),
+                  Text(viewModel.ipCountText),
+                  Text(viewModel.httpStatusText),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(viewModel.registrar ?? 'Registrar inconnu'),
+              Text(viewModel.hostingProvider ?? 'Hebergeur inconnu'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DomainRowActions extends StatelessWidget {
+  const _DomainRowActions({required this.result, required this.viewModel});
+
+  final Map<String, dynamic> result;
+  final _DomainResultViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'Copier le domaine ${viewModel.domain}',
+          onPressed: () => _copyDomain(context, viewModel),
+          icon: const Icon(Icons.copy, size: 18),
+        ),
+        IconButton(
+          tooltip: 'Voir le detail ${viewModel.domain}',
+          onPressed: () => _openDomainDetail(context, result),
+          icon: const Icon(Icons.open_in_new, size: 18),
+        ),
+      ],
+    );
+  }
+}
+
+class _DomainContactsList extends StatelessWidget {
+  const _DomainContactsList({required this.contacts});
+
+  final List<Map<String, dynamic>> contacts;
+
+  @override
+  Widget build(BuildContext context) {
+    if (contacts.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionTitle('Contacts publics'),
+        const SizedBox(height: 10),
+        for (final contact in contacts.take(8)) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF9FAFB),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+            ),
+            child: Text(
+              _formatDomainContact(contact),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: const Color(0xFF374151),
+                height: 1.45,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _DomainDnsSummary extends StatelessWidget {
+  const _DomainDnsSummary({required this.dns});
+
+  final Map<String, dynamic> dns;
+
+  @override
+  Widget build(BuildContext context) {
+    final records = _mapValue(dns['records']);
+    final items = <String>[];
+    for (final type in [
+      'A',
+      'AAAA',
+      'CNAME',
+      'NS',
+      'MX',
+      'TXT',
+      'SOA',
+      'CAA',
+    ]) {
+      final entry = _mapValue(records[type]);
+      final values = _stringList(entry['records']);
+      if (values.isNotEmpty) {
+        items.add('$type: ${values.take(3).join(', ')}');
+      }
+    }
+
+    return _TextList(title: 'DNS', items: items);
+  }
+}
+
+class _DomainIpSummary extends StatelessWidget {
+  const _DomainIpSummary({required this.ips});
+
+  final List<Map<String, dynamic>> ips;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = ips.take(8).map((item) {
+      final viewModel = _IpResultViewModel(item);
+      return '${viewModel.ip} - ${viewModel.operatorName ?? 'operateur inconnu'} - ${viewModel.country ?? 'pays inconnu'}';
+    }).toList();
+
+    return _TextList(title: 'IP associees', items: items);
+  }
+}
+
+class _RequestTemplateBox extends StatelessWidget {
+  const _RequestTemplateBox({required this.template});
+
+  final String template;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionTitle('Fiche de demande'),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF9FAFB),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: SelectableText(
+            template,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: const Color(0xFF374151),
+              height: 1.45,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DomainResultViewModel {
+  const _DomainResultViewModel(this.raw);
+
+  final Map<String, dynamic> raw;
+
+  bool get ok => raw['ok'] == true;
+
+  String get domain =>
+      _textValue(raw['domain']) ??
+      _textValue(raw['input']) ??
+      'Domaine inconnu';
+
+  String? get errorText => _textValue(raw['error']);
+
+  Map<String, dynamic> get summary => _mapValue(raw['summary']);
+
+  Map<String, dynamic> get dns => _mapValue(raw['dns']);
+
+  Map<String, dynamic> get rdap => _mapValue(raw['rdap']);
+
+  Map<String, dynamic> get hosting => _mapValue(raw['hosting']);
+
+  Map<String, dynamic> get http => _mapValue(raw['http']);
+
+  Map<String, dynamic> get tls => _mapValue(raw['tls']);
+
+  Map<String, dynamic> get certificateTransparency =>
+      _mapValue(raw['certificate_transparency']);
+
+  Map<String, dynamic> get contactWorkflow =>
+      _mapValue(raw['contact_workflow']);
+
+  List<Map<String, dynamic>> get ips => _mapList(raw['ips']);
+
+  List<Map<String, dynamic>> get publicContacts =>
+      _mapList(contactWorkflow['public_contacts']);
+
+  List<String> get hostingEvidence => _stringList(hosting['evidence']);
+
+  List<String> get limitations => _stringList(contactWorkflow['limitations']);
+
+  String? get registrar =>
+      _textValue(summary['registrar']) ?? _textValue(rdap['registrar']);
+
+  String? get hostingProvider =>
+      _textValue(summary['hosting_provider']) ??
+      _textValue(hosting['probable_provider']);
+
+  String? get createdAt =>
+      _textValue(summary['created_at']) ?? _textValue(rdap['created_at']);
+
+  String? get expiresAt =>
+      _textValue(summary['expires_at']) ?? _textValue(rdap['expires_at']);
+
+  String? get ownerVisibility =>
+      _textValue(contactWorkflow['owner_visibility']) ??
+      _textValue(summary['owner_visibility']);
+
+  String get ownerVisibilityLabel {
+    switch (ownerVisibility) {
+      case 'public':
+        return 'Proprietaire public';
+      case 'partial':
+        return 'Proprietaire partiel';
+      case 'redacted':
+        return 'Proprietaire masque';
+      case 'unknown':
+        return 'Proprietaire inconnu';
+    }
+    return ownerVisibility ?? 'Proprietaire inconnu';
+  }
+
+  String get categoryOrError {
+    if (!ok) {
+      return errorText ?? 'Erreur analyse';
+    }
+    return ownerVisibilityLabel;
+  }
+
+  int? get ipCount =>
+      _intValue(summary['ip_count']) ?? (ips.isEmpty ? null : ips.length);
+
+  String get ipCountText {
+    final count = ipCount;
+    if (count == null) {
+      return 'IP inconnues';
+    }
+    return count > 1 ? '$count IP' : '$count IP';
+  }
+
+  bool get isCdnOrProxy =>
+      _boolValue(summary['cdn_or_proxy']) ??
+      _boolValue(hosting['is_cdn_or_proxy_probable']) ??
+      false;
+
+  String get cdnText => isCdnOrProxy ? 'probable' : 'non detecte';
+
+  String get httpStatusText {
+    final status =
+        _textValue(summary['http_status']) ?? _textValue(http['status']);
+    return status == null ? 'HTTP inconnu' : 'HTTP $status';
+  }
+
+  String get tlsText {
+    if (_boolValue(tls['ok']) != true) {
+      return 'TLS indisponible';
+    }
+    final days =
+        _intValue(summary['tls_expires_in_days']) ??
+        _intValue(tls['expires_in_days']);
+    if (days == null) {
+      return 'TLS valide';
+    }
+    return 'expire dans $days j';
+  }
+
+  String get spfText => _boolLabel(_boolValue(summary['has_spf']));
+
+  String get dmarcText => _boolLabel(_boolValue(summary['has_dmarc']));
+
+  String get dnssecText => _boolLabel(_boolValue(summary['dnssec']));
+
+  String get ctSubdomainCountText {
+    final count =
+        _intValue(summary['ct_subdomain_count']) ??
+        _intValue(certificateTransparency['subdomain_count']);
+    return count?.toString() ?? 'Inconnu';
+  }
+
+  int? get occurrences => _intValue(raw['occurrences']);
+
+  String get requestTemplate =>
+      _textValue(contactWorkflow['request_template']) ?? '';
+
+  String get summaryText {
+    final entries = <MapEntry<String, String?>>[
+      MapEntry('Domaine', domain),
+      MapEntry('Registrar', registrar),
+      MapEntry('Proprietaire', ownerVisibilityLabel),
+      MapEntry('Hebergeur probable', hostingProvider),
+      MapEntry('CDN/proxy', cdnText),
+      MapEntry('IP trouvees', ipCountText),
+      MapEntry('Creation', createdAt),
+      MapEntry('Expiration', expiresAt),
+      MapEntry('HTTP', httpStatusText),
+      MapEntry('TLS', tlsText),
+      MapEntry('SPF', spfText),
+      MapEntry('DMARC', dmarcText),
+      MapEntry('DNSSEC', dnssecText),
+      MapEntry('Sous-domaines CT', ctSubdomainCountText),
+    ];
+
+    return entries
+        .where((entry) => entry.value != null && entry.value!.isNotEmpty)
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join('\n');
+  }
+}
+
+String _boolLabel(bool? value) {
+  if (value == true) {
+    return 'oui';
+  }
+  if (value == false) {
+    return 'non';
+  }
+  return 'inconnu';
+}
+
+String _formatDomainContact(Map<String, dynamic> contact) {
+  final roles = _stringList(contact['roles']).join(', ');
+  final entries = <String>[
+    if (roles.isNotEmpty) 'Roles: $roles',
+    if (_textValue(contact['name']) != null)
+      'Nom: ${_textValue(contact['name'])}',
+    if (_textValue(contact['organization']) != null)
+      'Organisation: ${_textValue(contact['organization'])}',
+    if (_textValue(contact['email']) != null)
+      'Email: ${_textValue(contact['email'])}',
+    if (_textValue(contact['phone']) != null)
+      'Telephone: ${_textValue(contact['phone'])}',
+  ];
+  return entries.join('\n');
+}
+
+void _openDomainDetail(BuildContext context, Map<String, dynamic> result) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (context) =>
+          DomainDetailPage(result: Map<String, dynamic>.from(result)),
+    ),
+  );
+}
+
+Future<void> _copyDomain(
+  BuildContext context,
+  _DomainResultViewModel viewModel,
+) async {
+  await _copyText(context, viewModel.domain, 'Domaine');
+}
+
+Future<void> _copyDomainSummary(
+  BuildContext context,
+  _DomainResultViewModel viewModel,
+) async {
+  await _copyText(context, viewModel.summaryText, 'Resume');
+}
+
+Future<void> _copyDomainRequest(
+  BuildContext context,
+  _DomainResultViewModel viewModel,
+) async {
+  await _copyText(context, viewModel.requestTemplate, 'Demande');
 }
 
 class _PageFrame extends StatelessWidget {
@@ -2041,134 +3274,6 @@ class _InfoCard extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _SearchPanel extends StatelessWidget {
-  const _SearchPanel({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.label,
-    required this.hintText,
-    required this.buttonText,
-    required this.resultTitle,
-    required this.resultText,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-  final String label;
-  final String hintText;
-  final String buttonText;
-  final String resultTitle;
-  final String resultText;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            CircleAvatar(
-              radius: 24,
-              backgroundColor: const Color(0xFFE0F2F1),
-              child: Icon(icon, color: const Color(0xFF0F766E)),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                title,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  color: const Color(0xFF111827),
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          description,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: const Color(0xFF4B5563),
-            height: 1.45,
-          ),
-        ),
-        const SizedBox(height: 28),
-        Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 720;
-              final field = TextField(
-                decoration: InputDecoration(
-                  labelText: label,
-                  hintText: hintText,
-                ),
-              );
-              final button = FilledButton(
-                onPressed: () {},
-                child: Text(buttonText),
-              );
-
-              if (wide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: field),
-                    const SizedBox(width: 14),
-                    button,
-                  ],
-                );
-              }
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [field, const SizedBox(height: 14), button],
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 22),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: const Color(0xFF111827),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                resultTitle,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                resultText,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFFD1D5DB),
-                  height: 1.45,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

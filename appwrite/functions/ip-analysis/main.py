@@ -12,6 +12,7 @@ CORS_HEADERS = {
 
 MAX_CSV_BYTES = 1_000_000
 MAX_UNIQUE_IPS = 100
+MAX_UNIQUE_DOMAINS = 50
 
 
 def get_request_attr(req: Any, *names: str, default: Any = None) -> Any:
@@ -99,8 +100,15 @@ def handle_health() -> tuple[int, dict]:
         "limits": {
             "max_csv_bytes": MAX_CSV_BYTES,
             "max_unique_ips": MAX_UNIQUE_IPS,
+            "max_unique_domains": MAX_UNIQUE_DOMAINS,
         },
-        "endpoints": ["GET /health", "POST /analyze-ip", "POST /analyze-ips"],
+        "endpoints": [
+            "GET /health",
+            "POST /analyze-ip",
+            "POST /analyze-ips",
+            "POST /analyze-domain",
+            "POST /analyze-domains",
+        ],
     }
 
 
@@ -130,9 +138,35 @@ def handle_analyze_ips(payload: dict) -> tuple[int, dict]:
     return (200 if response.get("ok") else 400), response
 
 
+def handle_analyze_domain(payload: dict) -> tuple[int, dict]:
+    from domain_analysis import build_api_response_for_single_domain
+
+    domain = str(payload.get("domain", "")).strip()
+    if not domain:
+        return 400, {"ok": False, "error": "Field 'domain' is required."}
+    return 200, build_api_response_for_single_domain(domain)
+
+
+def handle_analyze_domains(payload: dict) -> tuple[int, dict]:
+    from domain_analysis import build_api_response_for_multiple_domains
+
+    domains = payload.get("domains", [])
+    if domains is None:
+        domains = []
+    if not isinstance(domains, list):
+        return 400, {"ok": False, "error": "Field 'domains' must be a list when provided."}
+
+    csv_text = payload.get("csv")
+    if csv_text is not None and not isinstance(csv_text, str):
+        return 400, {"ok": False, "error": "Field 'csv' must be a string when provided."}
+
+    response = build_api_response_for_multiple_domains(domains, csv_text=csv_text)
+    return (200 if response.get("ok") else 400), response
+
+
 def status_for_exception(error: Exception) -> int:
     name = error.__class__.__name__
-    if name in {"PayloadTooLargeError", "TooManyIpsError"}:
+    if name in {"PayloadTooLargeError", "TooManyIpsError", "TooManyDomainsError"}:
         return 413
     if name == "UpstreamRateLimitError":
         return 429
@@ -170,6 +204,14 @@ def main(context: Any) -> Any:
 
         if path == "/analyze-ips":
             status, response_payload = handle_analyze_ips(payload)
+            return json_response(context, response_payload, status)
+
+        if path == "/analyze-domain":
+            status, response_payload = handle_analyze_domain(payload)
+            return json_response(context, response_payload, status)
+
+        if path == "/analyze-domains":
+            status, response_payload = handle_analyze_domains(payload)
             return json_response(context, response_payload, status)
 
         return json_response(context, {"ok": False, "error": "Route not found."}, 404)

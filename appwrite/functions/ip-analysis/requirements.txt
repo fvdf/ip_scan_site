@@ -1,1 +1,2 @@
-# This Appwrite Function uses only the Python standard library.
+dnspython==2.7.0
+idna==3.10
