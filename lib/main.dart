@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dropzone/flutter_dropzone.dart';
 import 'package:http/http.dart' as http;
 
 void main() {
@@ -426,12 +428,18 @@ class _IpSearchPageState extends State<IpSearchPage> {
     super.initState();
     _csvFileName = widget.initialCsvFileName;
     _csvText = widget.initialCsvText;
+    _ipController.addListener(_handleTextChanged);
   }
 
   @override
   void dispose() {
+    _ipController.removeListener(_handleTextChanged);
     _ipController.dispose();
     super.dispose();
+  }
+
+  void _handleTextChanged() {
+    setState(() {});
   }
 
   void _setMode(_IpSearchMode mode) {
@@ -463,20 +471,29 @@ class _IpSearchPageState extends State<IpSearchPage> {
       return;
     }
 
+    await _loadCsvBytes(file.name, bytes);
+  }
+
+  Future<void> _loadCsvBytes(String fileName, List<int> bytes) async {
     if (bytes.length > _maxCsvBytes) {
-      setState(() {
-        _status = _IpSearchStatus.error;
-        _errorMessage = 'Le fichier CSV depasse la limite de 1 MB.';
-      });
+      _setCsvError('Le fichier CSV depasse la limite de 1 MB.');
       return;
     }
 
     setState(() {
-      _csvFileName = file.name;
+      _csvFileName = fileName;
       _csvText = utf8.decode(bytes, allowMalformed: true);
       _status = _IpSearchStatus.idle;
       _response = null;
       _errorMessage = null;
+    });
+  }
+
+  void _setCsvError(String message) {
+    setState(() {
+      _status = _IpSearchStatus.error;
+      _errorMessage = message;
+      _response = null;
     });
   }
 
@@ -560,14 +577,20 @@ class _IpSearchPageState extends State<IpSearchPage> {
             _SingleIpForm(
               controller: _ipController,
               loading: _status == _IpSearchStatus.loading,
+              canSubmit: _ipController.text.trim().isNotEmpty,
               onSubmit: _runSingleIpSearch,
             )
           else
             _CsvForm(
               fileName: _csvFileName,
+              hasFile: _csvText?.trim().isNotEmpty == true,
               loading: _status == _IpSearchStatus.loading,
               onPick: _pickCsv,
+              onDropFile: _loadCsvBytes,
+              onError: _setCsvError,
               onSubmit: _runCsvSearch,
+              helperText:
+                  'Colonne reconnue: ip, ips, ip_address, adresse_ip. Sans colonne reconnue, toutes les cellules sont scannees et seules les IP valides sont gardees.',
             ),
           const SizedBox(height: 22),
           _ResultPanel(
@@ -729,11 +752,13 @@ class _SingleIpForm extends StatelessWidget {
   const _SingleIpForm({
     required this.controller,
     required this.loading,
+    required this.canSubmit,
     required this.onSubmit,
   });
 
   final TextEditingController controller;
   final bool loading;
+  final bool canSubmit;
   final VoidCallback onSubmit;
 
   @override
@@ -746,14 +771,14 @@ class _SingleIpForm extends StatelessWidget {
             controller: controller,
             enabled: !loading,
             textInputAction: TextInputAction.search,
-            onSubmitted: (_) => loading ? null : onSubmit(),
+            onSubmitted: (_) => loading || !canSubmit ? null : onSubmit(),
             decoration: const InputDecoration(
               labelText: 'Adresse IP',
               hintText: 'Exemple: 8.8.8.8',
             ),
           );
           final button = FilledButton(
-            onPressed: loading ? null : onSubmit,
+            onPressed: loading || !canSubmit ? null : onSubmit,
             child: const Text('Rechercher l IP'),
           );
 
@@ -778,18 +803,60 @@ class _SingleIpForm extends StatelessWidget {
   }
 }
 
-class _CsvForm extends StatelessWidget {
+class _CsvForm extends StatefulWidget {
   const _CsvForm({
     required this.fileName,
+    required this.hasFile,
     required this.loading,
     required this.onPick,
+    required this.onDropFile,
+    required this.onError,
     required this.onSubmit,
+    required this.helperText,
   });
 
   final String? fileName;
+  final bool hasFile;
   final bool loading;
   final VoidCallback onPick;
+  final Future<void> Function(String fileName, List<int> bytes) onDropFile;
+  final ValueChanged<String> onError;
   final VoidCallback onSubmit;
+  final String helperText;
+
+  @override
+  State<_CsvForm> createState() => _CsvFormState();
+}
+
+class _CsvFormState extends State<_CsvForm> {
+  DropzoneViewController? _dropzoneController;
+  bool _dropzoneHovering = false;
+
+  Future<void> _handleDroppedFile(DropzoneFileInterface file) async {
+    final controller = _dropzoneController;
+    if (controller == null || widget.loading) {
+      return;
+    }
+
+    try {
+      final fileName = await controller.getFilename(file);
+      if (!fileName.toLowerCase().endsWith('.csv')) {
+        widget.onError('Deposez un fichier CSV.');
+        return;
+      }
+
+      final bytes = await controller.getFileData(file);
+      await widget.onDropFile(fileName, bytes);
+    } catch (error) {
+      widget.onError('Impossible de lire le fichier depose.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _dropzoneHovering = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -797,31 +864,63 @@ class _CsvForm extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final wide = constraints.maxWidth >= 720;
-          final fileLabel = Text(
-            fileName ?? 'Aucun fichier selectionne',
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: const Color(0xFF374151)),
+          final fileLabel = _SelectedCsvFileIndicator(
+            fileName: widget.fileName,
+            hasFile: widget.hasFile,
           );
           final pickButton = OutlinedButton.icon(
-            onPressed: loading ? null : onPick,
+            onPressed: widget.loading ? null : widget.onPick,
             icon: const Icon(Icons.upload_file),
             label: const Text('Choisir un CSV'),
           );
           final submitButton = FilledButton(
-            onPressed: loading ? null : onSubmit,
+            onPressed: widget.loading || !widget.hasFile
+                ? null
+                : widget.onSubmit,
             child: const Text('Analyser le CSV'),
+          );
+          final hint = Text(
+            widget.helperText,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: const Color(0xFF6B7280),
+              height: 1.4,
+            ),
+          );
+          final dropzone = _CsvDropzone(
+            hovering: _dropzoneHovering,
+            onCreated: (controller) => _dropzoneController = controller,
+            onHover: () {
+              if (!widget.loading) {
+                setState(() {
+                  _dropzoneHovering = true;
+                });
+              }
+            },
+            onLeave: () {
+              setState(() {
+                _dropzoneHovering = false;
+              });
+            },
+            onDropFile: _handleDroppedFile,
           );
 
           if (wide) {
-            return Row(
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: fileLabel),
-                const SizedBox(width: 14),
-                pickButton,
-                const SizedBox(width: 10),
-                submitButton,
+                Row(
+                  children: [
+                    Expanded(child: fileLabel),
+                    const SizedBox(width: 14),
+                    pickButton,
+                    const SizedBox(width: 10),
+                    submitButton,
+                  ],
+                ),
+                const SizedBox(height: 14),
+                dropzone,
+                const SizedBox(height: 10),
+                hint,
               ],
             );
           }
@@ -834,9 +933,155 @@ class _CsvForm extends StatelessWidget {
               pickButton,
               const SizedBox(height: 10),
               submitButton,
+              const SizedBox(height: 14),
+              dropzone,
+              const SizedBox(height: 10),
+              hint,
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _CsvDropzone extends StatelessWidget {
+  const _CsvDropzone({
+    required this.hovering,
+    required this.onCreated,
+    required this.onHover,
+    required this.onLeave,
+    required this.onDropFile,
+  });
+
+  final bool hovering;
+  final ValueChanged<DropzoneViewController> onCreated;
+  final VoidCallback onHover;
+  final VoidCallback onLeave;
+  final ValueChanged<DropzoneFileInterface> onDropFile;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = hovering
+        ? const Color(0xFF0F766E)
+        : const Color(0xFFE5E7EB);
+    final backgroundColor = hovering
+        ? const Color(0xFFE0F2F1)
+        : const Color(0xFFF9FAFB);
+
+    return Container(
+      height: 140,
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (kIsWeb)
+            DropzoneView(
+              operation: DragOperation.copy,
+              cursor: CursorType.grab,
+              onCreated: onCreated,
+              onHover: onHover,
+              onLeave: onLeave,
+              onDropFile: onDropFile,
+              onDropInvalid: (_) => onLeave(),
+              onError: (_) => onLeave(),
+            ),
+          Center(
+            child: IgnorePointer(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.file_upload_outlined,
+                    color: hovering
+                        ? const Color(0xFF0F766E)
+                        : const Color(0xFF6B7280),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    kIsWeb
+                        ? 'Glissez-deposez un CSV ici'
+                        : 'Drag and drop disponible sur la version web',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF374151),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Le bouton reste disponible si besoin.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF6B7280),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelectedCsvFileIndicator extends StatelessWidget {
+  const _SelectedCsvFileIndicator({
+    required this.fileName,
+    required this.hasFile,
+  });
+
+  final String? fileName;
+  final bool hasFile;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = hasFile ? const Color(0xFF0F766E) : const Color(0xFF6B7280);
+    final background = hasFile
+        ? const Color(0xFFE0F2F1)
+        : const Color(0xFFF9FAFB);
+    final border = hasFile ? const Color(0xFF99F6E4) : const Color(0xFFE5E7EB);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasFile ? Icons.check_circle : Icons.insert_drive_file_outlined,
+            color: color,
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              hasFile
+                  ? fileName ?? 'CSV pret a analyser'
+                  : 'Aucun fichier selectionne',
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: hasFile
+                    ? const Color(0xFF115E59)
+                    : const Color(0xFF374151),
+                fontWeight: hasFile ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+          if (hasFile) ...[
+            const SizedBox(width: 10),
+            const _CategoryBadge(label: 'CSV pret'),
+          ],
+        ],
       ),
     );
   }
@@ -1027,7 +1272,6 @@ class _CsvResult extends StatelessWidget {
 
     final summary = _mapValue(response['summary']);
     final categories = _mapValue(summary['categories']);
-    final priorities = _mapList(summary['priority_ips']);
     final results = _mapList(response['results']);
 
     return _ResultSurface(
@@ -1047,10 +1291,6 @@ class _CsvResult extends StatelessWidget {
           if (categories.isNotEmpty) ...[
             const SizedBox(height: 18),
             _CategoryChips(categories: categories),
-          ],
-          if (priorities.isNotEmpty) ...[
-            const SizedBox(height: 18),
-            _PriorityList(priorities: priorities),
           ],
           const SizedBox(height: 18),
           _ResultList(results: results),
@@ -1155,7 +1395,7 @@ class _IpDetailHeader extends StatelessWidget {
             FilledButton.icon(
               onPressed: () => _copySummary(context, viewModel),
               icon: const Icon(Icons.summarize, size: 18),
-              label: const Text('Copier le resume'),
+              label: const Text('Copier le resultat'),
             ),
           ],
         );
@@ -1377,39 +1617,6 @@ class _CategoryChips extends StatelessWidget {
   }
 }
 
-class _PriorityList extends StatelessWidget {
-  const _PriorityList({required this.priorities});
-
-  final List<Map<String, dynamic>> priorities;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'IP a prioriser',
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            color: const Color(0xFF111827),
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 10),
-        for (final item in priorities) ...[
-          Text(
-            '${item['ip']} - ${item['requisition_target']} - score ${item['score']}',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF374151),
-              height: 1.45,
-            ),
-          ),
-          const SizedBox(height: 6),
-        ],
-      ],
-    );
-  }
-}
-
 class _ResultList extends StatelessWidget {
   const _ResultList({required this.results});
 
@@ -1426,15 +1633,16 @@ class _ResultList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Expanded(
-              child: Text(
-                'Resultats',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF111827),
-                  fontWeight: FontWeight.w800,
-                ),
+            Text(
+              'Resultats',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: const Color(0xFF111827),
+                fontWeight: FontWeight.w800,
               ),
             ),
             Text(
@@ -1442,6 +1650,11 @@ class _ResultList extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _copyIpResults(context, sortedResults),
+              icon: const Icon(Icons.copy_all, size: 18),
+              label: const Text('Copier les resultats'),
             ),
           ],
         ),
@@ -2046,14 +2259,12 @@ class _IpResultViewModel {
   String get summaryText {
     final entries = <MapEntry<String, String?>>[
       MapEntry('IP', ip),
+      MapEntry('Type', ipVersionLabel),
       MapEntry('Pays', country),
       MapEntry('Ville', city),
       MapEntry('Operateur', operatorName),
       MapEntry('ASN', asn),
-      MapEntry('Categorie', ok ? category : errorText),
-      MapEntry('Score', scoreText),
-      MapEntry('Valeur investigative', investigativeValue),
-      MapEntry('Confiance', confidence),
+      MapEntry('Erreur', ok ? null : errorText),
     ];
 
     return entries
@@ -2080,7 +2291,93 @@ Future<void> _copySummary(
   BuildContext context,
   _IpResultViewModel viewModel,
 ) async {
-  await _copyText(context, viewModel.summaryText, 'Resume');
+  await _copyText(context, _buildIpResultsReport([viewModel.raw]), 'Resultat');
+}
+
+Future<void> _copyIpResults(
+  BuildContext context,
+  List<Map<String, dynamic>> results,
+) async {
+  await _copyText(context, _buildIpResultsReport(results), 'Resultats');
+}
+
+String _buildIpResultsReport(List<Map<String, dynamic>> results) {
+  final models = results.map(_IpResultViewModel.new).toList();
+  final okModels = models.where((model) => model.ok).toList();
+  final errorCount = models.length - okModels.length;
+  final localities = _countLabels(
+    okModels
+        .map((model) => model.locationText)
+        .where((label) => label != 'Localisation inconnue'),
+  );
+  final operatorCount = okModels.where(_isOperatorOrAccessIp).length;
+  final mobileCount = okModels.where(_isMobileIp).length;
+  final anonymousCount = okModels.where(_isAnonymousIp).length;
+  final infrastructureCount = okModels.where(_isInfrastructureIp).length;
+  final exploitableIpv4Count = okModels.where(_isExploitableIpv4).length;
+  final exploitableIpv6Count = okModels.where(_isExploitableIpv6).length;
+
+  final intro = [
+    'Synthese des resultats IP',
+    '${models.length} IP analysees: ${okModels.length} analyses OK, $errorCount erreurs.',
+    if (localities.isNotEmpty)
+      'Localites principales: ${_formatTopCounts(localities)}.',
+    '$operatorCount IP semblent correspondre a un operateur ou a un acces direct.',
+    '$mobileCount IP semblent etre des acces mobiles.',
+    '$anonymousCount IP semblent anonymisees ou passer par un relais.',
+    '$infrastructureCount IP semblent appartenir a un hebergeur, datacenter ou infrastructure technique.',
+    '$exploitableIpv4Count IPv4 sont probablement exploitables pour orienter une requisition si le port source, la date, l heure et le fuseau horaire sont disponibles.',
+    if (exploitableIpv6Count > 0)
+      '$exploitableIpv6Count IPv6 semblent probablement exploitables pour orienter une requisition sans contrainte de port source equivalente cote outil.',
+  ];
+
+  final details = models
+      .map((model) => model.summaryText)
+      .where((summary) => summary.trim().isNotEmpty)
+      .toList();
+  if (details.isEmpty) {
+    return intro.join('\n');
+  }
+  return '${intro.join('\n')}\n\nDetails par IP:\n\n${details.join('\n\n')}';
+}
+
+bool _isAnonymousIp(_IpResultViewModel model) {
+  final category = _lowerText(model.category);
+  final org = _lowerText(model.organization);
+  return category == 'anonymisation_probable' ||
+      _boolValue(model.flags['is_proxy_or_vpn_or_tor']) == true ||
+      org.contains('private relay') ||
+      org.contains('warp');
+}
+
+bool _isInfrastructureIp(_IpResultViewModel model) {
+  final category = _lowerText(model.category);
+  return category == 'infrastructure_ou_relais_probable' ||
+      _boolValue(model.flags['is_hosting_or_datacenter']) == true;
+}
+
+bool _isMobileIp(_IpResultViewModel model) {
+  return _lowerText(model.category) == 'mobile_probable' ||
+      _boolValue(model.flags['is_mobile']) == true;
+}
+
+bool _isOperatorOrAccessIp(_IpResultViewModel model) {
+  final category = _lowerText(model.category);
+  return category == 'residential_or_isp_probable' ||
+      category == 'mobile_probable' ||
+      (!_isAnonymousIp(model) && !_isInfrastructureIp(model));
+}
+
+bool _isExploitableIpv4(_IpResultViewModel model) {
+  return model.isIpv4 &&
+      model.originIpVisible == true &&
+      _investigativeValueRank(model.investigativeValue) <= 1;
+}
+
+bool _isExploitableIpv6(_IpResultViewModel model) {
+  return model.isIpv6 &&
+      model.originIpVisible == true &&
+      _investigativeValueRank(model.investigativeValue) <= 1;
 }
 
 Future<void> _copyText(BuildContext context, String text, String label) async {
@@ -2161,6 +2458,33 @@ List<String> _stringList(Object? value) {
   return value.map((item) => item.toString()).toList();
 }
 
+Map<String, int> _countLabels(Iterable<String?> labels) {
+  final counts = <String, int>{};
+  for (final label in labels) {
+    final text = label?.trim();
+    if (text == null || text.isEmpty) {
+      continue;
+    }
+    counts[text] = (counts[text] ?? 0) + 1;
+  }
+  return counts;
+}
+
+String _formatTopCounts(Map<String, int> counts, {int limit = 5}) {
+  final entries = counts.entries.toList()
+    ..sort((left, right) {
+      final countCompare = right.value.compareTo(left.value);
+      if (countCompare != 0) {
+        return countCompare;
+      }
+      return left.key.compareTo(right.key);
+    });
+  return entries
+      .take(limit)
+      .map((entry) => '${entry.key}: ${entry.value}')
+      .join(', ');
+}
+
 class DomainSearchPage extends StatefulWidget {
   const DomainSearchPage({
     super.key,
@@ -2194,12 +2518,18 @@ class _DomainSearchPageState extends State<DomainSearchPage> {
     super.initState();
     _csvFileName = widget.initialCsvFileName;
     _csvText = widget.initialCsvText;
+    _domainController.addListener(_handleTextChanged);
   }
 
   @override
   void dispose() {
+    _domainController.removeListener(_handleTextChanged);
     _domainController.dispose();
     super.dispose();
+  }
+
+  void _handleTextChanged() {
+    setState(() {});
   }
 
   void _setMode(_DomainSearchMode mode) {
@@ -2231,20 +2561,29 @@ class _DomainSearchPageState extends State<DomainSearchPage> {
       return;
     }
 
+    await _loadCsvBytes(file.name, bytes);
+  }
+
+  Future<void> _loadCsvBytes(String fileName, List<int> bytes) async {
     if (bytes.length > _maxCsvBytes) {
-      setState(() {
-        _status = _IpSearchStatus.error;
-        _errorMessage = 'Le fichier CSV depasse la limite de 1 MB.';
-      });
+      _setCsvError('Le fichier CSV depasse la limite de 1 MB.');
       return;
     }
 
     setState(() {
-      _csvFileName = file.name;
+      _csvFileName = fileName;
       _csvText = utf8.decode(bytes, allowMalformed: true);
       _status = _IpSearchStatus.idle;
       _response = null;
       _errorMessage = null;
+    });
+  }
+
+  void _setCsvError(String message) {
+    setState(() {
+      _status = _IpSearchStatus.error;
+      _errorMessage = message;
+      _response = null;
     });
   }
 
@@ -2328,14 +2667,20 @@ class _DomainSearchPageState extends State<DomainSearchPage> {
             _SingleDomainForm(
               controller: _domainController,
               loading: _status == _IpSearchStatus.loading,
+              canSubmit: _domainController.text.trim().isNotEmpty,
               onSubmit: _runSingleDomainSearch,
             )
           else
             _CsvForm(
               fileName: _csvFileName,
+              hasFile: _csvText?.trim().isNotEmpty == true,
               loading: _status == _IpSearchStatus.loading,
               onPick: _pickCsv,
+              onDropFile: _loadCsvBytes,
+              onError: _setCsvError,
               onSubmit: _runCsvSearch,
+              helperText:
+                  'Colonne reconnue: domain, domains, domaine, nom_de_domaine, host, url. Sans colonne reconnue, toutes les cellules sont scannees et seuls les domaines valides sont gardes.',
             ),
           const SizedBox(height: 22),
           _DomainResultPanel(
@@ -2424,11 +2769,13 @@ class _SingleDomainForm extends StatelessWidget {
   const _SingleDomainForm({
     required this.controller,
     required this.loading,
+    required this.canSubmit,
     required this.onSubmit,
   });
 
   final TextEditingController controller;
   final bool loading;
+  final bool canSubmit;
   final VoidCallback onSubmit;
 
   @override
@@ -2441,14 +2788,14 @@ class _SingleDomainForm extends StatelessWidget {
             controller: controller,
             enabled: !loading,
             textInputAction: TextInputAction.search,
-            onSubmitted: (_) => loading ? null : onSubmit(),
+            onSubmitted: (_) => loading || !canSubmit ? null : onSubmit(),
             decoration: const InputDecoration(
               labelText: 'Nom de domaine',
               hintText: 'Exemple: example.com',
             ),
           );
           final button = FilledButton(
-            onPressed: loading ? null : onSubmit,
+            onPressed: loading || !canSubmit ? null : onSubmit,
             child: const Text('Rechercher le domaine'),
           );
 
@@ -2744,7 +3091,7 @@ class _DomainDetailHeader extends StatelessWidget {
             FilledButton.icon(
               onPressed: () => _copyDomainSummary(context, viewModel),
               icon: const Icon(Icons.summarize, size: 18),
-              label: const Text('Copier le resume'),
+              label: const Text('Copier le resultat'),
             ),
           ],
         );
@@ -2824,21 +3171,21 @@ class _DomainResultList extends StatelessWidget {
       return const Text('Aucun resultat.');
     }
 
-    final visibleResults = results.take(30).toList();
-    final hiddenCount = results.length - visibleResults.length;
+    final visibleResults = results;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Expanded(
-              child: Text(
-                'Resultats',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF111827),
-                  fontWeight: FontWeight.w800,
-                ),
+            Text(
+              'Resultats',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: const Color(0xFF111827),
+                fontWeight: FontWeight.w800,
               ),
             ),
             Text(
@@ -2846,6 +3193,11 @@ class _DomainResultList extends StatelessWidget {
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _copyDomainResults(context, visibleResults),
+              icon: const Icon(Icons.copy_all, size: 18),
+              label: const Text('Copier les resultats'),
             ),
           ],
         ),
@@ -2858,15 +3210,6 @@ class _DomainResultList extends StatelessWidget {
             return _MobileDomainResultCards(results: visibleResults);
           },
         ),
-        if (hiddenCount > 0) ...[
-          const SizedBox(height: 10),
-          Text(
-            '$hiddenCount resultats supplementaires non affiches.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
-          ),
-        ],
       ],
     );
   }
@@ -3384,6 +3727,7 @@ class _DomainResultViewModel {
   String get summaryText {
     final entries = <MapEntry<String, String?>>[
       MapEntry('Domaine', domain),
+      MapEntry('Erreur', ok ? null : errorText),
       MapEntry('Registrar', registrar),
       MapEntry('Proprietaire', ownerVisibilityLabel),
       MapEntry('Hebergeur probable', hostingProvider),
@@ -3452,7 +3796,60 @@ Future<void> _copyDomainSummary(
   BuildContext context,
   _DomainResultViewModel viewModel,
 ) async {
-  await _copyText(context, viewModel.summaryText, 'Resume');
+  await _copyText(
+    context,
+    _buildDomainResultsReport([viewModel.raw]),
+    'Resultat',
+  );
+}
+
+Future<void> _copyDomainResults(
+  BuildContext context,
+  List<Map<String, dynamic>> results,
+) async {
+  await _copyText(context, _buildDomainResultsReport(results), 'Resultats');
+}
+
+String _buildDomainResultsReport(List<Map<String, dynamic>> results) {
+  final models = results.map(_DomainResultViewModel.new).toList();
+  final okModels = models.where((model) => model.ok).toList();
+  final errorCount = models.length - okModels.length;
+  final registrarCounts = _countLabels(
+    okModels.map((model) => model.registrar ?? 'Registrar inconnu'),
+  );
+  final hostingCounts = _countLabels(
+    okModels.map((model) => model.hostingProvider ?? 'Hebergeur inconnu'),
+  );
+  final nonPublicOwnerCount = okModels
+      .where((model) => model.hasNonPublicOwner)
+      .length;
+  final publicOwnerCount = okModels.length - nonPublicOwnerCount;
+  final cdnCount = okModels.where((model) => model.isCdnOrProxy).length;
+  final domainsWithIpsCount = okModels
+      .where((model) => model.ipCount != null && model.ipCount! > 0)
+      .length;
+
+  final intro = [
+    'Synthese des resultats domaine',
+    '${models.length} domaines analyses: ${okModels.length} analyses OK, $errorCount erreurs.',
+    '$publicOwnerCount domaines ont un proprietaire public dans les donnees RDAP.',
+    '$nonPublicOwnerCount domaines ont un proprietaire inconnu, masque ou partiel.',
+    if (registrarCounts.isNotEmpty)
+      'Registrars principaux: ${_formatTopCounts(registrarCounts)}.',
+    if (hostingCounts.isNotEmpty)
+      'Hebergeurs probables principaux: ${_formatTopCounts(hostingCounts)}.',
+    '$cdnCount domaines semblent passer par un CDN ou proxy.',
+    '$domainsWithIpsCount domaines ont au moins une IP associee detectee.',
+  ];
+
+  final details = models
+      .map((model) => model.summaryText)
+      .where((summary) => summary.trim().isNotEmpty)
+      .toList();
+  if (details.isEmpty) {
+    return intro.join('\n');
+  }
+  return '${intro.join('\n')}\n\nDetails par domaine:\n\n${details.join('\n\n')}';
 }
 
 class _PageFrame extends StatelessWidget {

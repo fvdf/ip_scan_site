@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ip_scan/main.dart';
 
@@ -30,6 +31,8 @@ void main() {
 
     expect(find.text('Choisir un CSV'), findsOneWidget);
     expect(find.text('Analyser le CSV'), findsOneWidget);
+    expect(find.textContaining('Sans colonne reconnue'), findsOneWidget);
+    expect(find.textContaining('Drag and drop'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(TextButton, 'Accueil'));
     await tester.pumpAndSettle();
@@ -48,6 +51,71 @@ void main() {
     expect(find.text('Nom de domaine'), findsWidgets);
     expect(find.text('Exemple: example.com'), findsOneWidget);
     expect(find.textContaining('Backend non configure'), findsOneWidget);
+  });
+
+  testWidgets('disables submit buttons until input or csv file exists', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1100, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: IpSearchPage(api: _FakeIpAnalysisApi(_csvResponse([]))),
+        ),
+      ),
+    );
+
+    var ipButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Rechercher l IP'),
+    );
+    expect(ipButton.onPressed, isNull);
+
+    await tester.enterText(find.byType(TextField), '8.8.8.8');
+    await tester.pump();
+
+    ipButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Rechercher l IP'),
+    );
+    expect(ipButton.onPressed, isNotNull);
+
+    await tester.tap(find.text('Fichier CSV'));
+    await tester.pumpAndSettle();
+
+    final csvButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Analyser le CSV'),
+    );
+    expect(csvButton.onPressed, isNull);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: DomainSearchPage(api: _FakeDomainAnalysisApi())),
+      ),
+    );
+
+    var domainButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Rechercher le domaine'),
+    );
+    expect(domainButton.onPressed, isNull);
+
+    await tester.enterText(find.byType(TextField), 'example.com');
+    await tester.pump();
+
+    domainButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Rechercher le domaine'),
+    );
+    expect(domainButton.onPressed, isNotNull);
+
+    await tester.tap(find.text('Fichier CSV'));
+    await tester.pumpAndSettle();
+
+    final domainCsvButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Analyser le CSV'),
+    );
+    expect(domainCsvButton.onPressed, isNull);
   });
 
   testWidgets('shows desktop csv results and opens ip detail', (tester) async {
@@ -70,10 +138,14 @@ void main() {
 
     await tester.tap(find.text('Fichier CSV'));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Sans colonne reconnue'), findsOneWidget);
+    expect(find.text('CSV pret'), findsOneWidget);
     await tester.tap(find.text('Analyser le CSV'));
     await tester.pumpAndSettle();
 
     expect(find.text('Resultats'), findsOneWidget);
+    expect(find.text('IP a prioriser'), findsNothing);
+    expect(find.text('Copier les resultats'), findsOneWidget);
     expect(find.text('IP'), findsWidgets);
     expect(find.text('Priorite'), findsOneWidget);
     expect(find.text('Cible'), findsOneWidget);
@@ -88,7 +160,7 @@ void main() {
     expect(find.text('Detail IP 8.8.8.8'), findsOneWidget);
     expect(find.text('IPv4'), findsWidgets);
     expect(find.textContaining('port source'), findsOneWidget);
-    expect(find.text('Copier le resume'), findsOneWidget);
+    expect(find.text('Copier le resultat'), findsOneWidget);
     expect(find.text('Pour aller plus loin'), findsOneWidget);
 
     await tester.pageBack();
@@ -122,12 +194,30 @@ void main() {
 
     await tester.tap(find.text('Fichier CSV'));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Sans colonne reconnue'), findsOneWidget);
     await tester.tap(find.text('Analyser le CSV'));
     await tester.pumpAndSettle();
 
     expect(find.text('35/35 affiches'), findsOneWidget);
     expect(find.byKey(const ValueKey('ip-row-192.0.2.35')), findsOneWidget);
     expect(find.textContaining('resultats supplementaires'), findsNothing);
+
+    final clipboardText = await _captureClipboardText(tester, () async {
+      await tester.tap(find.text('Copier les resultats'));
+      await tester.pump();
+    });
+
+    expect(clipboardText, contains('Synthese des resultats IP'));
+    expect(clipboardText, contains('35 IP analysees'));
+    expect(clipboardText, contains('Details par IP'));
+    expect(clipboardText, contains('IP: 192.0.2.1'));
+    expect(clipboardText, contains('IP: 192.0.2.35'));
+    expect(clipboardText, contains('\n\nIP:'));
+    expect(clipboardText, isNot(contains('Categorie:')));
+    expect(clipboardText, isNot(contains('Score:')));
+    expect(clipboardText, isNot(contains('Valeur investigative:')));
+    expect(clipboardText, isNot(contains('Confiance:')));
+    expect(clipboardText, isNot(contains('Occurrences:')));
   });
 
   testWidgets('sorts csv IP results by investigative value', (tester) async {
@@ -178,6 +268,7 @@ void main() {
 
     await tester.tap(find.text('Fichier CSV'));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Sans colonne reconnue'), findsOneWidget);
     await tester.tap(find.text('Analyser le CSV'));
     await tester.pumpAndSettle();
 
@@ -245,6 +336,7 @@ void main() {
     );
 
     await tester.enterText(find.byType(TextField), '2001:db8::1');
+    await tester.pump();
     await tester.tap(find.text('Rechercher l IP'));
     await tester.pumpAndSettle();
 
@@ -303,12 +395,14 @@ void main() {
     );
 
     await tester.enterText(find.byType(TextField), 'https://www.example.com');
+    await tester.pump();
     await tester.tap(find.text('Rechercher le domaine'));
     await tester.pumpAndSettle();
 
     expect(find.text('example.com'), findsWidgets);
     expect(find.text('Example Registrar'), findsWidgets);
     expect(find.text('Proprietaire masque'), findsWidgets);
+    expect(find.text('Copier le resultat'), findsOneWidget);
     expect(find.text('Pistes de requisition'), findsOneWidget);
     expect(find.text('Registrar detecte: Example Registrar'), findsOneWidget);
     expect(
@@ -342,14 +436,29 @@ void main() {
 
     await tester.tap(find.text('Fichier CSV'));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Sans colonne reconnue'), findsOneWidget);
     await tester.tap(find.text('Analyser le CSV'));
     await tester.pumpAndSettle();
 
     expect(find.text('Resume des domaines'), findsOneWidget);
     expect(find.text('Resultats'), findsOneWidget);
+    expect(find.text('Copier les resultats'), findsOneWidget);
     expect(find.text('Domaine'), findsWidgets);
     expect(find.byTooltip('Copier le domaine example.com'), findsOneWidget);
     expect(find.byTooltip('Voir le detail example.com'), findsOneWidget);
+
+    final clipboardText = await _captureClipboardText(tester, () async {
+      await tester.ensureVisible(find.text('Copier les resultats'));
+      await tester.tap(find.text('Copier les resultats'));
+      await tester.pump();
+    });
+
+    expect(clipboardText, contains('Synthese des resultats domaine'));
+    expect(clipboardText, contains('1 domaines analyses'));
+    expect(clipboardText, contains('Details par domaine'));
+    expect(clipboardText, contains('Domaine: example.com'));
+    expect(clipboardText, contains('Registrar: Example Registrar'));
+    expect(clipboardText, isNot(contains('Occurrences:')));
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('domain-row-example.com')),
@@ -361,6 +470,34 @@ void main() {
     expect(find.text('Contacts publics'), findsOneWidget);
     expect(find.text('IP associees'), findsOneWidget);
   });
+}
+
+Future<String?> _captureClipboardText(
+  WidgetTester tester,
+  Future<void> Function() action,
+) async {
+  String? clipboardText;
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform,
+    (call) async {
+      if (call.method == 'Clipboard.setData') {
+        final arguments = call.arguments;
+        if (arguments is Map) {
+          clipboardText = arguments['text']?.toString();
+        }
+      }
+      return null;
+    },
+  );
+  addTearDown(
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    ),
+  );
+
+  await action();
+  return clipboardText;
 }
 
 class _FakeIpAnalysisApi extends IpAnalysisApi {
