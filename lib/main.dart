@@ -50,19 +50,28 @@ class SiteShell extends StatefulWidget {
 class _SiteShellState extends State<SiteShell> {
   int _selectedIndex = 0;
 
-  final List<_SitePage> _pages = const [
-    _SitePage(label: 'Accueil', icon: Icons.home_outlined, body: HomePage()),
-    _SitePage(
-      label: 'Recherche IP',
-      icon: Icons.travel_explore,
-      body: IpSearchPage(),
-    ),
-    _SitePage(
-      label: 'Recherche domaine',
-      icon: Icons.language,
-      body: DomainSearchPage(),
-    ),
-  ];
+  List<_SitePage> _buildPages() {
+    return [
+      _SitePage(
+        label: 'Accueil',
+        icon: Icons.home_outlined,
+        body: HomePage(
+          onIpSearch: () => _selectPage(1),
+          onDomainSearch: () => _selectPage(2),
+        ),
+      ),
+      const _SitePage(
+        label: 'Recherche IP',
+        icon: Icons.travel_explore,
+        body: IpSearchPage(),
+      ),
+      const _SitePage(
+        label: 'Recherche domaine',
+        icon: Icons.language,
+        body: DomainSearchPage(),
+      ),
+    ];
+  }
 
   void _selectPage(int index) {
     setState(() {
@@ -72,6 +81,8 @@ class _SiteShellState extends State<SiteShell> {
 
   @override
   Widget build(BuildContext context) {
+    final pages = _buildPages();
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final useDrawer = constraints.maxWidth < 900;
@@ -98,9 +109,9 @@ class _SiteShellState extends State<SiteShell> {
             actions: useDrawer
                 ? null
                 : [
-                    for (var i = 0; i < _pages.length; i++)
+                    for (var i = 0; i < pages.length; i++)
                       _MenuButton(
-                        label: _pages[i].label,
+                        label: pages[i].label,
                         selected: i == _selectedIndex,
                         onPressed: () => _selectPage(i),
                       ),
@@ -109,7 +120,7 @@ class _SiteShellState extends State<SiteShell> {
           ),
           drawer: useDrawer
               ? _SiteDrawer(
-                  pages: _pages,
+                  pages: pages,
                   selectedIndex: _selectedIndex,
                   onSelect: _selectPage,
                 )
@@ -118,7 +129,7 @@ class _SiteShellState extends State<SiteShell> {
             duration: const Duration(milliseconds: 180),
             child: KeyedSubtree(
               key: ValueKey(_selectedIndex),
-              child: _pages[_selectedIndex].body,
+              child: pages[_selectedIndex].body,
             ),
           ),
         );
@@ -249,21 +260,31 @@ class _MenuButton extends StatelessWidget {
 }
 
 class HomePage extends StatelessWidget {
-  const HomePage({super.key});
+  const HomePage({super.key, this.onIpSearch, this.onDomainSearch});
+
+  final VoidCallback? onIpSearch;
+  final VoidCallback? onDomainSearch;
 
   @override
   Widget build(BuildContext context) {
-    return const _PageFrame(
+    return _PageFrame(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [_HomeIntro(), SizedBox(height: 42), _FeatureGrid()],
+        children: [
+          _HomeIntro(onIpSearch: onIpSearch, onDomainSearch: onDomainSearch),
+          const SizedBox(height: 42),
+          const _FeatureGrid(),
+        ],
       ),
     );
   }
 }
 
 class _HomeIntro extends StatelessWidget {
-  const _HomeIntro();
+  const _HomeIntro({required this.onIpSearch, required this.onDomainSearch});
+
+  final VoidCallback? onIpSearch;
+  final VoidCallback? onDomainSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -278,7 +299,7 @@ class _HomeIntro extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Analyse reseau rapide',
+                'Tableau de bord reseau',
                 style: Theme.of(context).textTheme.displaySmall?.copyWith(
                   color: const Color(0xFF111827),
                   fontWeight: FontWeight.w800,
@@ -287,7 +308,7 @@ class _HomeIntro extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               Text(
-                'Consultez vos informations IP et preparez vos recherches de noms de domaine depuis une interface simple.',
+                'Lancez une analyse IP, controlez un domaine et retrouvez les elements utiles pour orienter une requisition.',
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: const Color(0xFF4B5563),
                   height: 1.5,
@@ -295,14 +316,26 @@ class _HomeIntro extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 26),
-              FilledButton(
-                onPressed: () {},
-                child: const Text('Commencer une recherche'),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  FilledButton.icon(
+                    onPressed: onIpSearch,
+                    icon: const Icon(Icons.travel_explore),
+                    label: const Text('Recherche IP'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: onDomainSearch,
+                    icon: const Icon(Icons.language),
+                    label: const Text('Recherche domaine'),
+                  ),
+                ],
               ),
             ],
           ),
         ),
-        const _StatusPanel(),
+        const _DashboardPanel(),
       ],
     );
   }
@@ -321,18 +354,19 @@ class _FeatureGrid extends StatelessWidget {
             icon: Icons.public,
             title: 'Recherche IP',
             text:
-                'Identifiez une adresse IP et centralisez les premiers details utiles.',
+                'Analysez une IP ou un CSV, puis classez les adresses de la plus exploitable a la moins exploitable.',
           ),
           _InfoCard(
             icon: Icons.language,
             title: 'Nom de domaine',
-            text: 'Lancez une verification de domaine depuis une page dediee.',
+            text:
+                'Controlez DNS, RDAP, IP associees, registrar et hebergeur probable.',
           ),
           _InfoCard(
-            icon: Icons.devices,
-            title: 'Interface responsive',
+            icon: Icons.assignment_outlined,
+            title: 'Pistes de requisition',
             text:
-                'La navigation reste accessible sur ordinateur, tablette et mobile.',
+                'Reperez rapidement le fournisseur a contacter et les donnees a demander.',
           ),
         ];
 
@@ -1049,6 +1083,7 @@ class _IpResultDetailContent extends StatelessWidget {
         ] else ...[
           _KeyValueWrap(
             values: {
+              'Type': viewModel.ipVersionLabel,
               'Pays': viewModel.country,
               'Ville': viewModel.city,
               'Operateur': viewModel.operatorName,
@@ -1062,6 +1097,10 @@ class _IpResultDetailContent extends StatelessWidget {
             },
           ),
           const SizedBox(height: 18),
+          if (viewModel.isIpv4) ...[
+            const _Ipv4PortRequirementNotice(),
+            const SizedBox(height: 18),
+          ],
           _FlagChips(flags: viewModel.flags),
           const SizedBox(height: 18),
           _TextList(title: 'Raisons', items: reasons),
@@ -1097,6 +1136,8 @@ class _IpDetailHeader extends StatelessWidget {
                   label: viewModel.categoryOrError,
                   error: !viewModel.ok,
                 ),
+                if (viewModel.ipVersionLabel != null)
+                  _IpVersionBadge(label: viewModel.ipVersionLabel!),
                 _ScorePill(score: viewModel.score),
               ],
             ),
@@ -1159,6 +1200,31 @@ class _InlineErrorBlock extends StatelessWidget {
         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
           color: const Color(0xFF991B1B),
           height: 1.4,
+        ),
+      ),
+    );
+  }
+}
+
+class _Ipv4PortRequirementNotice extends StatelessWidget {
+  const _Ipv4PortRequirementNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFF59E0B)),
+      ),
+      child: Text(
+        'IPv4: indiquez idealement le port source avec l IP, la date, l heure et le fuseau horaire. Sans port source, une requisition peut ne pas suffire, notamment en cas de partage d adresse ou de CGNAT.',
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          color: const Color(0xFF92400E),
+          height: 1.45,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -1329,7 +1395,7 @@ class _PriorityList extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        for (final item in priorities.take(8)) ...[
+        for (final item in priorities) ...[
           Text(
             '${item['ip']} - ${item['requisition_target']} - score ${item['score']}',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -1355,8 +1421,7 @@ class _ResultList extends StatelessWidget {
       return const Text('Aucun resultat.');
     }
 
-    final visibleResults = results.take(30).toList();
-    final hiddenCount = results.length - visibleResults.length;
+    final sortedResults = _sortIpResultsByInvestigativeValue(results);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1373,7 +1438,7 @@ class _ResultList extends StatelessWidget {
               ),
             ),
             Text(
-              '${visibleResults.length}/${results.length} affiches',
+              '${sortedResults.length}/${results.length} affiches',
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
@@ -1384,29 +1449,110 @@ class _ResultList extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             if (constraints.maxWidth >= 760) {
-              return _DesktopIpResultsTable(results: visibleResults);
+              return _DesktopIpResultsTable(results: sortedResults);
             }
-            return _MobileIpResultCards(results: visibleResults);
+            return _MobileIpResultCards(results: sortedResults);
           },
         ),
-        if (hiddenCount > 0) ...[
-          const SizedBox(height: 10),
-          Text(
-            '$hiddenCount resultats supplementaires non affiches.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: const Color(0xFF6B7280)),
-          ),
-        ],
       ],
     );
   }
 }
 
-class _DesktopIpResultsTable extends StatelessWidget {
+List<Map<String, dynamic>> _sortIpResultsByInvestigativeValue(
+  List<Map<String, dynamic>> results,
+) {
+  return [...results]..sort(_compareIpResults);
+}
+
+int _compareIpResults(Map<String, dynamic> left, Map<String, dynamic> right) {
+  final leftModel = _IpResultViewModel(left);
+  final rightModel = _IpResultViewModel(right);
+
+  if (leftModel.ok != rightModel.ok) {
+    return leftModel.ok ? -1 : 1;
+  }
+
+  final valueCompare = _investigativeValueRank(
+    leftModel.investigativeValue,
+  ).compareTo(_investigativeValueRank(rightModel.investigativeValue));
+  if (valueCompare != 0) {
+    return valueCompare;
+  }
+
+  final originCompare = _originVisibilityRank(
+    leftModel.originIpVisible,
+  ).compareTo(_originVisibilityRank(rightModel.originIpVisible));
+  if (originCompare != 0) {
+    return originCompare;
+  }
+
+  final scoreCompare = (rightModel.score ?? -1).compareTo(
+    leftModel.score ?? -1,
+  );
+  if (scoreCompare != 0) {
+    return scoreCompare;
+  }
+
+  final occurrenceCompare = (rightModel.occurrences ?? 0).compareTo(
+    leftModel.occurrences ?? 0,
+  );
+  if (occurrenceCompare != 0) {
+    return occurrenceCompare;
+  }
+
+  return leftModel.ip.compareTo(rightModel.ip);
+}
+
+int _investigativeValueRank(String? value) {
+  switch (value?.toLowerCase().trim()) {
+    case 'elevee':
+    case 'haute':
+    case 'high':
+      return 0;
+    case 'moyenne':
+    case 'medium':
+      return 1;
+    case 'faible':
+    case 'low':
+      return 2;
+  }
+  return 3;
+}
+
+int _originVisibilityRank(bool? value) {
+  if (value == true) {
+    return 0;
+  }
+  if (value == false) {
+    return 1;
+  }
+  return 2;
+}
+
+class _DesktopIpResultsTable extends StatefulWidget {
   const _DesktopIpResultsTable({required this.results});
 
   final List<Map<String, dynamic>> results;
+
+  @override
+  State<_DesktopIpResultsTable> createState() => _DesktopIpResultsTableState();
+}
+
+class _DesktopIpResultsTableState extends State<_DesktopIpResultsTable> {
+  late final ScrollController _horizontalController;
+
+  @override
+  void initState() {
+    super.initState();
+    _horizontalController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _horizontalController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1416,25 +1562,32 @@ class _DesktopIpResultsTable extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE5E7EB)),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          showCheckboxColumn: false,
-          headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
-          columns: const [
-            DataColumn(label: Text('IP')),
-            DataColumn(label: Text('Pays')),
-            DataColumn(label: Text('Ville')),
-            DataColumn(label: Text('Operateur')),
-            DataColumn(label: Text('Categorie')),
-            DataColumn(label: Text('Score')),
-            DataColumn(label: Text('Occurrences')),
-            DataColumn(label: Text('Actions')),
-          ],
-          rows: [
-            for (final result in results)
-              _buildIpDataRow(context: context, result: result),
-          ],
+      child: Scrollbar(
+        controller: _horizontalController,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          controller: _horizontalController,
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            showCheckboxColumn: false,
+            columnSpacing: 18,
+            horizontalMargin: 12,
+            dataRowMinHeight: 64,
+            dataRowMaxHeight: 76,
+            headingRowColor: WidgetStateProperty.all(const Color(0xFFF9FAFB)),
+            columns: const [
+              DataColumn(label: Text('Priorite')),
+              DataColumn(label: Text('IP')),
+              DataColumn(label: Text('Cible')),
+              DataColumn(label: Text('Localisation')),
+              DataColumn(label: Text('Occurrences')),
+              DataColumn(label: Text('Actions')),
+            ],
+            rows: [
+              for (final result in widget.results)
+                _buildIpDataRow(context: context, result: result),
+            ],
+          ),
         ),
       ),
     );
@@ -1458,32 +1611,29 @@ class _DesktopIpResultsTable extends StatelessWidget {
         return null;
       }),
       cells: [
+        DataCell(_ReliabilityBadge(viewModel: viewModel)),
         DataCell(
           SizedBox(
-            width: 130,
-            child: Text(
-              viewModel.ip,
-              key: ValueKey('ip-row-${viewModel.ip}'),
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w800),
+            width: 170,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  viewModel.ip,
+                  key: ValueKey('ip-row-${viewModel.ip}'),
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                if (viewModel.ipVersionLabel != null)
+                  _IpVersionBadge(label: viewModel.ipVersionLabel!),
+              ],
             ),
           ),
         ),
-        DataCell(_TableText(viewModel.country ?? 'Pays inconnu', width: 110)),
-        DataCell(_TableText(viewModel.city ?? 'Ville inconnue', width: 120)),
-        DataCell(
-          _TableText(viewModel.operatorName ?? 'Operateur inconnu', width: 190),
-        ),
-        DataCell(
-          SizedBox(
-            width: 210,
-            child: _CategoryBadge(
-              label: viewModel.categoryOrError,
-              error: !viewModel.ok,
-            ),
-          ),
-        ),
-        DataCell(_ScorePill(score: viewModel.score)),
+        DataCell(_TableText(viewModel.requisitionTarget, width: 210)),
+        DataCell(_TableText(viewModel.locationText, width: 170)),
         DataCell(Text(viewModel.occurrencesText)),
         DataCell(_IpRowActions(result: result, viewModel: viewModel)),
       ],
@@ -1570,18 +1720,20 @@ class _MobileIpResultCard extends StatelessWidget {
                 runSpacing: 8,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
+                  _ReliabilityBadge(viewModel: viewModel),
                   _CategoryBadge(
                     label: viewModel.categoryOrError,
                     error: !viewModel.ok,
                   ),
+                  if (viewModel.ipVersionLabel != null)
+                    _IpVersionBadge(label: viewModel.ipVersionLabel!),
                   _ScorePill(score: viewModel.score),
                   Text(viewModel.occurrencesText),
                 ],
               ),
               const SizedBox(height: 10),
-              Text(viewModel.country ?? 'Pays inconnu'),
-              Text(viewModel.city ?? 'Ville inconnue'),
-              Text(viewModel.operatorName ?? 'Operateur inconnu'),
+              Text(viewModel.locationText),
+              Text(viewModel.requisitionTarget),
             ],
           ),
         ),
@@ -1612,6 +1764,74 @@ class _IpRowActions extends StatelessWidget {
           icon: const Icon(Icons.open_in_new, size: 18),
         ),
       ],
+    );
+  }
+}
+
+class _ReliabilityBadge extends StatelessWidget {
+  const _ReliabilityBadge({required this.viewModel});
+
+  final _IpResultViewModel viewModel;
+
+  @override
+  Widget build(BuildContext context) {
+    final rank = _investigativeValueRank(viewModel.investigativeValue);
+    final label = !viewModel.ok
+        ? 'Erreur'
+        : switch (rank) {
+            0 => 'Forte',
+            1 => 'Moyenne',
+            2 => 'Faible',
+            _ => 'Inconnue',
+          };
+    final color = !viewModel.ok
+        ? const Color(0xFF991B1B)
+        : switch (rank) {
+            0 => const Color(0xFF166534),
+            1 => const Color(0xFF92400E),
+            2 => const Color(0xFF6B7280),
+            _ => const Color(0xFF374151),
+          };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: color,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _IpVersionBadge extends StatelessWidget {
+  const _IpVersionBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: const Color(0xFF1D4ED8),
+          fontWeight: FontWeight.w800,
+        ),
+      ),
     );
   }
 }
@@ -1771,9 +1991,49 @@ class _IpResultViewModel {
 
   String? get investigativeValue => _textValue(analysis['investigative_value']);
 
+  bool? get originIpVisible => _boolValue(analysis['origin_ip_visible']);
+
   String? get confidence => _textValue(analysis['confidence']);
 
   int? get occurrences => _intValue(raw['occurrences']);
+
+  bool get isIpv6 => ip.contains(':');
+
+  bool get isIpv4 => !isIpv6 && ip.contains('.');
+
+  String? get ipVersionLabel {
+    if (isIpv6) {
+      return 'IPv6';
+    }
+    if (isIpv4) {
+      return 'IPv4';
+    }
+    return null;
+  }
+
+  String get locationText {
+    final countryText = country;
+    final cityText = city;
+    final parts = [?countryText, ?cityText];
+    return parts.isEmpty ? 'Localisation inconnue' : parts.join(', ');
+  }
+
+  String get requisitionTarget {
+    if (!ok) {
+      return errorText ?? 'Analyse impossible';
+    }
+    final org = _lowerText(organization);
+    if (org.contains('icloud private relay')) {
+      return 'Apple / Akamai';
+    }
+    if (org.contains('warp')) {
+      return 'Cloudflare';
+    }
+    if (_boolValue(flags['is_mobile']) == true) {
+      return operatorName ?? 'Operateur mobile';
+    }
+    return operatorName ?? organization ?? 'Fournisseur reseau a determiner';
+  }
 
   String get occurrencesText {
     final count = occurrences;
@@ -1839,6 +2099,10 @@ String? _textValue(Object? value) {
     return null;
   }
   return text;
+}
+
+String _lowerText(Object? value) {
+  return value?.toString().trim().toLowerCase() ?? '';
 }
 
 int? _intValue(Object? value) {
@@ -2426,9 +2690,9 @@ class _DomainResultDetailContent extends StatelessWidget {
           _DomainIpSummary(ips: viewModel.ips),
           const SizedBox(height: 18),
           _TextList(title: 'Limites et suite', items: viewModel.limitations),
-          if (viewModel.requestTemplate.isNotEmpty) ...[
+          if (viewModel.hasNonPublicOwner) ...[
             const SizedBox(height: 18),
-            _RequestTemplateBox(template: viewModel.requestTemplate),
+            _DomainRequisitionGuidance(viewModel: viewModel),
           ],
         ],
       ],
@@ -2482,12 +2746,6 @@ class _DomainDetailHeader extends StatelessWidget {
               icon: const Icon(Icons.summarize, size: 18),
               label: const Text('Copier le resume'),
             ),
-            if (viewModel.requestTemplate.isNotEmpty)
-              OutlinedButton.icon(
-                onPressed: () => _copyDomainRequest(context, viewModel),
-                icon: const Icon(Icons.assignment_outlined, size: 18),
-                label: const Text('Copier la demande'),
-              ),
           ],
         );
 
@@ -2895,17 +3153,20 @@ class _DomainIpSummary extends StatelessWidget {
   }
 }
 
-class _RequestTemplateBox extends StatelessWidget {
-  const _RequestTemplateBox({required this.template});
+class _DomainRequisitionGuidance extends StatelessWidget {
+  const _DomainRequisitionGuidance({required this.viewModel});
 
-  final String template;
+  final _DomainResultViewModel viewModel;
 
   @override
   Widget build(BuildContext context) {
+    final registrar = viewModel.registrar ?? 'non determine';
+    final hosting = viewModel.hostingProvider ?? 'non determine';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionTitle('Fiche de demande'),
+        const _SectionTitle('Pistes de requisition'),
         const SizedBox(height: 10),
         Container(
           width: double.infinity,
@@ -2915,12 +3176,60 @@ class _RequestTemplateBox extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFFE5E7EB)),
           ),
-          child: SelectableText(
-            template,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF374151),
-              height: 1.45,
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Registrar detecte: $registrar',
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Hebergeur web probable: $hosting',
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: const Color(0xFF111827),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Le registrar peut etre requis pour obtenir l identite et les coordonnees declarees du titulaire. Ces donnees sont declaratives et ne sont pas forcement verifiees par le registrar.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF374151),
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'La demande peut aussi viser les moyens de paiement utilises pour acheter ou renouveler le nom de domaine.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF374151),
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'L hebergeur web probable est estime avec les donnees DNS, les IP associees, l ASN, l organisation reseau, les CNAME et les indices CDN/proxy.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: const Color(0xFF374151),
+                  height: 1.45,
+                ),
+              ),
+              if (viewModel.isCdnOrProxy) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'CDN/proxy probable: les IP visibles peuvent ne pas etre celles du serveur d origine.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: const Color(0xFF92400E),
+                    height: 1.45,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ],
@@ -3059,8 +3368,18 @@ class _DomainResultViewModel {
 
   int? get occurrences => _intValue(raw['occurrences']);
 
-  String get requestTemplate =>
-      _textValue(contactWorkflow['request_template']) ?? '';
+  bool get hasNonPublicOwner {
+    switch (ownerVisibility) {
+      case 'public':
+        return false;
+      case 'partial':
+      case 'redacted':
+      case 'unknown':
+      case null:
+        return true;
+    }
+    return true;
+  }
 
   String get summaryText {
     final entries = <MapEntry<String, String?>>[
@@ -3136,13 +3455,6 @@ Future<void> _copyDomainSummary(
   await _copyText(context, viewModel.summaryText, 'Resume');
 }
 
-Future<void> _copyDomainRequest(
-  BuildContext context,
-  _DomainResultViewModel viewModel,
-) async {
-  await _copyText(context, viewModel.requestTemplate, 'Demande');
-}
-
 class _PageFrame extends StatelessWidget {
   const _PageFrame({required this.child});
 
@@ -3164,8 +3476,8 @@ class _PageFrame extends StatelessWidget {
   }
 }
 
-class _StatusPanel extends StatelessWidget {
-  const _StatusPanel();
+class _DashboardPanel extends StatelessWidget {
+  const _DashboardPanel();
 
   @override
   Widget build(BuildContext context) {
@@ -3189,11 +3501,11 @@ class _StatusPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _MetricLine(label: 'Pages', value: '3'),
+          _MetricLine(label: 'CSV IP', value: '100 IP uniques max'),
           SizedBox(height: 16),
-          _MetricLine(label: 'Navigation', value: 'Menu + drawer'),
+          _MetricLine(label: 'CSV domaines', value: '50 domaines max'),
           SizedBox(height: 16),
-          _MetricLine(label: 'Etat', value: 'Pret a connecter'),
+          _MetricLine(label: 'Resultats', value: 'tries par fiabilite'),
         ],
       ),
     );
